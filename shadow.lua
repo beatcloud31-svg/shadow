@@ -1,21 +1,33 @@
-local VERSION = "1.0.1"
+local VERSION = "1.1.0"
 
 local CONFIG = {
-	Credits   = "X4v",
+	Credits   = "X4V",
 	Discord   = "https://discord.gg/EXrwmjYcU",
+
+	-- Shown on the Home page. Edit names/roles here.
+	Developers = {
+		{ name = "X4V",      role = "UI Designer | Founder", avatar = "https://cdn.discordapp.com/avatars/1149740153850581054/21ea19ca39c74ff76502e2c3169985dd.png?size=128" },
+	},
+
+	-- Quick access scripts on the Home page: { name, desc, icon, url }
+	QuickScripts = {
+		{ name = "Infinite Yield", desc = "Admin commands", icon = "terminal", url = "https://raw.githubusercontent.com/EdgeIY/infiniteyield/master/source" },
+	},
 	ToggleKey = Enum.KeyCode.RightShift,
 	NotifyPosition = "TopRight",
 
 	Key = {
 		Enabled     = true,
-		GetKeyLink  = "https://discord.gg/EXrwmjYcU",
+		GetKeyLink  = "https://direct-link.net/10467882/1BXMAi69pzfM",
 
 		RemoteUrl   = "",
-		Keys        = { "SHADOW-2026" },
+		Keys        = {},  -- plain keys (optional): "KEY | YYYY-MM-DD". Empty = only bot-generated keys work.
 		-- keys from /shadowgenkey (SF-... lifetime, ST-... timed). Must match
 		-- shadow_secret in the bot's config.json, or generated keys won't work.
 		Secret      = "shadow-5353v4e7tbdjo01rcy0725s9xj",
+		DefaultDays = 30,    -- keys with no date expire this many days after first use (0 = never)
 		Remember    = true,
+		OfflineHours = 48,   -- how long the last downloaded key list stays usable if the server is down
 		MaxAttempts = 5,
 		LockSeconds = 30,
 	},
@@ -25,13 +37,24 @@ local SCRIPTS = {}
 
 local CHANGELOG = {
 	{
+		version = "1.1.0", date = "2026-10-31", title = "Home page and polish",
+		changes = {
+			{ "new", "Home page with your avatar, latest update, quick-access scripts and credits" },
+			{ "new", "Top tab bar: hold the toggle button and slide to a tab" },
+			{ "improved", "Notifications: accent strip, pulse ring, springy slide-in and error shake" },
+			{ "improved", "Key system shows expiry, remembers lockouts and handles server errors" },
+			{ "new", "Signed keys from the Discord bot (SF- lifetime, ST- timed) work offline" },
+			{ "removed", "Title glitch effect" },
+		},
+	},
+	{
 		version = "1.0.0", date = "2026-10-27", title = "Initial release",
 		changes = {
 			{ "new", "Key system in its own window, with saved keys and optional key expiry" },
 			{ "new", "Editor: tabs, saved scripts, line numbers and Lua syntax colours" },
 			{ "new", "ScriptBlox browser with search, filters and one-tap run / copy" },
 			{ "new", "Themes (8 presets incl. Liquid Glass, plus custom), UI scale, corner radius and a full-screen glow" },
-			{ "new", "Notifications, floating toggle button with a quick-switch wheel, and Settings" },
+			{ "new", "Notifications, floating toggle button at the top with a hold-to-open tab bar, and Settings" },
 			{ "new", "Optional Console tab (Settings > Console) showing live Roblox output" },
 		},
 	},
@@ -87,6 +110,19 @@ pcall(function() gui.ScreenInsets = Enum.ScreenInsets.None end)
 gui.DisplayOrder = 999
 gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 gui.Parent = parentGui
+
+local GuiService = game:GetService("GuiService")
+local function readTopInset()
+	local h = 0
+	local ok, r = pcall(function() return GuiService.TopbarInset end)
+	if ok and r then h = r.Max.Y end
+	if h <= 0 then
+		local ok2, v = pcall(function() return GuiService:GetGuiInset().Y end)
+		if ok2 and v then h = v end
+	end
+	return math.clamp(math.floor(h), 0, 90)
+end
+local TOP_INSET = readTopInset()
 G2L_register(gui, "ScreenGui")
 
 local STATE = { revealed = not CONFIG.Key.Enabled, dragTargets = {}, glassHooks = {} }
@@ -137,7 +173,6 @@ local SETTINGS = {
 	Notifications  = true,
 	NotifyPosition = CONFIG.NotifyPosition or "TopRight",
 	NotifyDuration = "Normal",
-	Glitch         = true,
 	FloatButton    = true,
 	Theme          = "Amethyst",
 	CustomHue      = 210,
@@ -426,7 +461,7 @@ local GLYPH = {
 local ICON_ALIASES = {
 	["trash-2"] = { "trash" }, ["circle-check"] = { "check-circle" }, ["circle-x"] = { "x-circle" },
 	["triangle-alert"] = { "alert-triangle" }, ["circle-alert"] = { "alert-circle" }, ["loader-circle"] = { "loader-2", "loader" },
-	["circle-plus"] = { "plus-circle" }, ["panel-left"] = { "sidebar" }, ["layout-grid"] = { "grid" },
+	["house"] = { "home" }, ["circle-plus"] = { "plus-circle" }, ["panel-left"] = { "sidebar" }, ["layout-grid"] = { "grid" },
 	["search-x"] = { "search" }, ["badge-check"] = { "check-circle", "check" }, ["file-code"] = { "file-text", "file" },
 	["shield-check"] = { "shield" }, ["bell-ring"] = { "bell" }, ["layout-dashboard"] = { "layout" }, ["square-dashed"] = { "square" },
 	["circle-dot"] = { "circle" }, ["arrow-up-left"] = { "arrow-up" }, ["arrow-up-right"] = { "arrow-up" },
@@ -484,8 +519,8 @@ end
 
 local NOTIF_W = 300
 local NPOS = {
-	TopRight    = { anchor = Vector2.new(1, 0), pos = UDim2.new(1, -14, 0, 14),  slide = 1,  bottom = false },
-	TopLeft     = { anchor = Vector2.new(0, 0), pos = UDim2.new(0, 14, 0, 14),   slide = -1, bottom = false },
+	TopRight    = { anchor = Vector2.new(1, 0), pos = UDim2.new(1, -14, 0, 14 + TOP_INSET),  slide = 1,  bottom = false },
+	TopLeft     = { anchor = Vector2.new(0, 0), pos = UDim2.new(0, 14, 0, 14 + TOP_INSET),   slide = -1, bottom = false },
 	BottomRight = { anchor = Vector2.new(1, 1), pos = UDim2.new(1, -14, 1, -14), slide = 1,  bottom = true },
 	BottomLeft  = { anchor = Vector2.new(0, 1), pos = UDim2.new(0, 14, 1, -14),  slide = -1, bottom = true },
 }
@@ -571,6 +606,8 @@ local function Notify(opts)
 	local glow = frame({ Size = UDim2.new(0, 170, 1, 0), BackgroundColor3 = kind.color, ZIndex = 0 }, card)
 	make("UIGradient", { Transparency = NumberSequence.new(0.72, 1), Rotation = 0 }, glow)
 	frame({ Position = UDim2.fromOffset(14, 0), Size = UDim2.new(1, -28, 0, 1), BackgroundColor3 = C.white, BackgroundTransparency = 0.82, ZIndex = 1 }, card)
+	local accent = frame({ Size = UDim2.new(0, 4, 1, 0), BackgroundColor3 = kind.color, ZIndex = 2 }, card)
+	make("UIGradient", { Rotation = 90, Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.55), NumberSequenceKeypoint.new(0.5, 0), NumberSequenceKeypoint.new(1, 0.55) }) }, accent)
 
 	local sheen = frame({ Size = UDim2.fromScale(1, 1), BackgroundColor3 = C.white, ZIndex = 2 }, card)
 	local sheenGrad = make("UIGradient", {
@@ -585,6 +622,9 @@ local function Notify(opts)
 	round(badge, 19)
 	stroke(badge, kind.color, 1.2, 0.5)
 	local badgeScale = make("UIScale", { Scale = 0 }, badge)
+	local ring = frame({ AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.fromOffset(38, 38), BackgroundTransparency = 1, ZIndex = 1 }, badge)
+	round(ring, 40)
+	local ringStroke = stroke(ring, kind.color, 2, 1)
 	local ic = Icon(badge, opts.Icon or kind.icon, 19, kind.color)
 	ic.AnchorPoint = Vector2.new(0.5, 0.5)
 	ic.Position = UDim2.fromScale(0.5, 0.5)
@@ -686,8 +726,24 @@ local function Notify(opts)
 		end
 	end
 
-	tween(card, 0.5, { Position = UDim2.fromOffset(0, 0), GroupTransparency = 0 }, Enum.EasingStyle.Quint)
+	tween(card, 0.6, { Position = UDim2.fromOffset(0, 0) }, Enum.EasingStyle.Back)
+	tween(card, 0.3, { GroupTransparency = 0 })
 	tween(cardScale, 0.55, { Scale = 1 }, Enum.EasingStyle.Back)
+	task.delay(0.2, function()
+		if not ring.Parent then return end
+		ringStroke.Transparency = 0.3
+		tween(ring, 0.7, { Size = UDim2.fromOffset(62, 62) }, Enum.EasingStyle.Quint)
+		tween(ringStroke, 0.7, { Transparency = 1 })
+	end)
+	if opts.Type == "error" then
+		task.delay(0.55, function()
+			for _, dx in ipairs({ -5, 5, -3, 3, 0 }) do
+				if closed or not card.Parent then return end
+				tween(card, 0.05, { Position = UDim2.fromOffset(dx, 0) })
+				task.wait(0.05)
+			end
+		end)
+	end
 	tween(halo, 0.7, { ImageTransparency = 0.8 })
 	task.delay(0.12, function()
 		if not badge.Parent then return end
@@ -761,14 +817,14 @@ do
 end
 local uiS0 = math.clamp(SETTINGS.UIScale, 1, 1.5)
 local W = math.floor((vp.X - MARGIN * 2) / uiS0)
-local H = math.floor((vp.Y - MARGIN * 2) / uiS0)
+local H = math.floor((vp.Y - MARGIN * 2 - TOP_INSET) / uiS0)
 local TOP_H, SIDE_W, STATUS_H = 0, 0, 0
 local RAIL_W, RAIL_GAP = 58, 12
 local WIN_W = W - RAIL_W - RAIL_GAP
 
 local root = frame({
-	Name = "Root", AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
-	Size = UDim2.new(1, -MARGIN * 2, 1, -MARGIN * 2), BackgroundTransparency = 1, Visible = STATE.revealed,
+	Name = "Root", AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(0.5, 0, 0.5, TOP_INSET / 2),
+	Size = UDim2.new(1, -MARGIN * 2, 1, -MARGIN * 2 - TOP_INSET), BackgroundTransparency = 1, Visible = STATE.revealed,
 }, gui)
 
 local scaler = frame({ Name = "Scaler", AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.fromScale(1 / uiS0, 1 / uiS0), BackgroundTransparency = 1 }, root)
@@ -964,9 +1020,6 @@ local function makeTitle(color, z)
 		Size = UDim2.fromScale(1, 1), ZIndex = z,
 	}, titleHolder)
 end
-local ghostA = makeTitle(P(120, 0, 15), 1)
-local ghostB = makeTitle(P(255, 90, 90), 1)
-ghostA.TextTransparency, ghostB.TextTransparency = 0.5, 0.7
 local title = makeTitle(C.white, 2)
 local titleStroke = stroke(title, C.red, 1.2, 0.5)
 titleStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Contextual
@@ -1243,7 +1296,7 @@ local function Tab(name, iconName, order)
 		Name = name, Size = UDim2.fromOffset(44, 44), BackgroundColor3 = C.white, BackgroundTransparency = 1,
 		Text = "", AutoButtonColor = false, BorderSizePixel = 0, LayoutOrder = order,
 	}, tabList)
-	round(b, 14)
+	local tabCorner = round(b, 14)
 	gradient(b, C.redHi, C.red2, 90)
 	local ic = Icon(b, iconName, 20, C.sub)
 	ic.AnchorPoint = Vector2.new(0.5, 0.5)
@@ -1252,7 +1305,7 @@ local function Tab(name, iconName, order)
 	round(ind, 2)
 	local dot = frame({ Size = UDim2.fromOffset(8, 8), Position = UDim2.new(1, -11, 0, 3), BackgroundColor3 = C.red, Visible = false }, b)
 	round(dot, 4)
-	local t = { btn = b, icon = ic, ind = ind, dot = dot }
+	local t = { btn = b, icon = ic, ind = ind, dot = dot, corner = tabCorner }
 	tabs[name] = t
 	bind(b.MouseButton1Click, function() showPage(name) end)
 	bind(b.MouseEnter, function() if current ~= name then tween(b, 0.15, { BackgroundTransparency = 0.88 }) end end)
@@ -1283,6 +1336,42 @@ local function safeBuild(name, fn)
 	return ok
 end
 
+do
+local railTabLayout = tabList:FindFirstChildOfClass("UIListLayout")
+local railLayout = side:FindFirstChildOfClass("UIListLayout")
+local closeCorner = closeBtn:FindFirstChildOfClass("UICorner")
+local function fitRail()
+	local eff = math.clamp(SETTINGS.UIScale, 1, 1.5)
+	local availH = root.AbsoluteSize.Y / eff
+	if availH < 50 then return end
+	local n = 0
+	for _, t in pairs(tabs) do
+		if t.btn.Visible then n = n + 1 end
+	end
+	if n == 0 then return end
+	local tabS, closeS, gapT, gapR = 44, 50, 6, 14
+	local function total() return 16 + n * tabS + (n - 1) * gapT + gapR + closeS end
+	while total() > availH - 6 and tabS > 34 do tabS = tabS - 1 end
+	if total() > availH - 6 then gapT, gapR = 3, 8 end
+	while total() > availH - 6 and tabS > 28 do tabS = tabS - 1 end
+	while total() > availH - 6 and closeS > 34 do closeS = closeS - 1 end
+	railTabLayout.Padding = UDim.new(0, gapT)
+	railLayout.Padding = UDim.new(0, gapR)
+	for _, t in pairs(tabs) do
+		t.btn.Size = UDim2.fromOffset(tabS, tabS)
+		t.corner.CornerRadius = UDim.new(0, math.floor(tabS * 0.32))
+		local px = math.floor(tabS * 0.45)
+		t.icon.Size = UDim2.fromOffset(px, px)
+	end
+	closeBtn.Size = UDim2.fromOffset(closeS, closeS)
+	if closeCorner then closeCorner.CornerRadius = UDim.new(0, math.floor(closeS / 2)) end
+	local cpx = math.floor(closeS * 0.44)
+	closeIc.Size = UDim2.fromOffset(cpx, cpx)
+end
+STATE.fitRail = fitRail
+end
+
+Tab("Home", "house", 0)
 Tab("Editor", "code", 1)
 Tab("ScriptBlox", "search", 2)
 Tab("Console", "terminal", 3)
@@ -1291,9 +1380,363 @@ Tab("Settings", "settings", 5)
 STATE.applyConsole = function()
 	tabs.Console.btn.Visible = SETTINGS.Console
 	if not SETTINGS.Console and current == "Console" then showPage("Editor") end
+	STATE.fitRail()
 end
 STATE.applyConsole()
+bind(root:GetPropertyChangedSignal("AbsoluteSize"), function() STATE.fitRail() end)
+bind(uiScale:GetPropertyChangedSignal("Scale"), function() STATE.fitRail() end)
+task.defer(function() STATE.fitRail() end)
 tabs.Updates.dot.Visible = unread
+
+safeBuild("Home", function()
+	local p = newPage("Home")
+	local list = List(p, UDim2.fromOffset(14, 12), UDim2.new(1, -28, 1, -18))
+	local ord = 0
+	local function nextOrder() ord = ord + 1 return ord end
+	local lp = Players.LocalPlayer
+
+	local function section(text)
+		local f = frame({ Size = UDim2.new(1, 0, 0, 18), BackgroundTransparency = 1, LayoutOrder = nextOrder() }, list)
+		local accent = frame({ Size = UDim2.fromOffset(3, 12), Position = UDim2.fromOffset(0, 3), BackgroundColor3 = C.red }, f)
+		round(accent, 2)
+		label({ Text = text:upper(), Font = Enum.Font.GothamBold, TextSize = 11, TextColor3 = C.sub, Position = UDim2.fromOffset(10, 0), Size = UDim2.new(1, -10, 1, 0) }, f)
+	end
+
+	local function box(order, pad)
+		local f = frame({ Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundColor3 = C.card, LayoutOrder = order }, list)
+		round(f, 12)
+		stroke(f, C.stroke, 1, 0.4)
+		make("UIPadding", { PaddingTop = UDim.new(0, pad), PaddingBottom = UDim.new(0, pad), PaddingLeft = UDim.new(0, 12), PaddingRight = UDim.new(0, 12) }, f)
+		make("UIListLayout", { SortOrder = Enum.SortOrder.LayoutOrder, Padding = UDim.new(0, 8) }, f)
+		return f
+	end
+
+	local function grid(cellH, cols)
+		local g = frame({ Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1, LayoutOrder = nextOrder() }, list)
+		make("UIGridLayout", {
+			CellSize = cols == 1 and UDim2.new(1, 0, 0, cellH) or UDim2.new(0.5, -5, 0, cellH), CellPadding = UDim2.fromOffset(10, 10),
+			SortOrder = Enum.SortOrder.LayoutOrder, FillDirectionMaxCells = cols,
+		}, g)
+		return g
+	end
+
+	local function avatar(parent, size, pos, letter)
+		local holder = frame({ Size = UDim2.fromOffset(size, size), Position = pos, BackgroundColor3 = C.bg }, parent)
+		round(holder, size / 2)
+		stroke(holder, C.redHi, 2, 0.35)
+		label({ Text = letter, Font = Enum.Font.GothamBold, TextSize = math.floor(size * 0.4), TextColor3 = C.sub, TextXAlignment = Enum.TextXAlignment.Center, Size = UDim2.fromScale(1, 1) }, holder)
+		local img = make("ImageLabel", { Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, BorderSizePixel = 0, ImageTransparency = 1, ScaleType = Enum.ScaleType.Crop, ZIndex = 2 }, holder)
+		round(img, size / 2)
+		return holder, img
+	end
+
+	local function loadRemoteAvatar(img, url, fname)
+		task.spawn(function()
+			local ok = pcall(function()
+				local asset = getcustomasset or getsynasset
+				if not asset or not canFile() then error("unsupported") end
+				local path = FOLDER .. "/" .. fname
+				if not isfile(path) then
+					local body = httpGet(url)
+					if not body then error("download failed") end
+					fileWrite(fname, body)
+				end
+				img.Image = asset(path)
+			end)
+			if ok and alive and img.Parent then tween(img, 0.3, { ImageTransparency = 0 }) end
+		end)
+	end
+
+	local function chip(parent, text, order)
+		local c = frame({ Size = UDim2.fromOffset(0, 20), AutomaticSize = Enum.AutomaticSize.X, BackgroundColor3 = C.bg, BackgroundTransparency = 0.15, LayoutOrder = order }, parent)
+		round(c, 10)
+		stroke(c, C.stroke, 1, 0.5)
+		make("UIPadding", { PaddingLeft = UDim.new(0, 9), PaddingRight = UDim.new(0, 9) }, c)
+		return label({ Text = text, Font = Enum.Font.GothamMedium, TextSize = 10, TextColor3 = C.sub, AutomaticSize = Enum.AutomaticSize.X, Size = UDim2.new(0, 0, 1, 0) }, c)
+	end
+
+	-- profile
+	local prof = frame({ Size = UDim2.new(1, 0, 0, 100), BackgroundColor3 = C.white, LayoutOrder = nextOrder() }, list)
+	round(prof, 14)
+	stroke(prof, C.stroke, 1, 0.4)
+	gradient(prof, P(52, 30, 40), P(24, 18, 26), 20)
+	local _, pImg = avatar(prof, 68, UDim2.fromOffset(16, 16), lp.Name:sub(1, 1):upper())
+	task.spawn(function()
+		local ok, url = pcall(function()
+			return Players:GetUserThumbnailAsync(lp.UserId, Enum.ThumbnailType.HeadShot, Enum.ThumbnailSize.Size150x150)
+		end)
+		if ok and url and alive and pImg.Parent then
+			pImg.Image = url
+			tween(pImg, 0.3, { ImageTransparency = 0 })
+		end
+	end)
+	label({ Text = "WELCOME BACK", Font = Enum.Font.GothamBold, TextSize = 10, TextColor3 = C.redHi, Position = UDim2.fromOffset(96, 14), Size = UDim2.new(1, -170, 0, 12) }, prof)
+	label({ Text = lp.DisplayName, Font = Enum.Font.GothamBold, TextSize = 18, TextTruncate = Enum.TextTruncate.AtEnd, Position = UDim2.fromOffset(96, 27), Size = UDim2.new(1, -170, 0, 22) }, prof)
+	label({ Text = "@" .. lp.Name, TextSize = 12, TextColor3 = C.sub, TextTruncate = Enum.TextTruncate.AtEnd, Position = UDim2.fromOffset(96, 50), Size = UDim2.new(1, -170, 0, 16) }, prof)
+	local vpill = frame({ AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -14, 0, 14), Size = UDim2.fromOffset(54, 20), BackgroundColor3 = C.red, BackgroundTransparency = 0.8 }, prof)
+	round(vpill, 10)
+	label({ Text = "v" .. VERSION, Font = Enum.Font.GothamBold, TextSize = 10, TextColor3 = C.redHi, TextXAlignment = Enum.TextXAlignment.Center, Size = UDim2.fromScale(1, 1) }, vpill)
+	local chips = frame({ Position = UDim2.fromOffset(96, 71), Size = UDim2.new(1, -110, 0, 20), BackgroundTransparency = 1 }, prof)
+	make("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, SortOrder = Enum.SortOrder.LayoutOrder, Padding = UDim.new(0, 6) }, chips)
+	local exName = "Executor"
+	if identifyexecutor then
+		local okE, n = pcall(identifyexecutor)
+		if okE and n then exName = tostring(n) end
+	end
+	chip(chips, exName, 1)
+	local keyChip = chip(chips, "", 3)
+	keyChip.Parent.Visible = false
+	local keyState = { known = false, exp = nil }
+	STATE.keyInfo = function(exp)
+		keyState.known, keyState.exp = true, exp
+		if keyChip.Parent then
+			local text = "Lifetime key"
+			if exp then
+				local days = math.floor((exp - os.time()) / 86400)
+				text = days <= 0 and "Expires today" or ("Expires in " .. days .. "d")
+			end
+			keyChip.Text = text
+			keyChip.Parent.Visible = true
+		end
+	end
+	local playersLbl = chip(chips, #Players:GetPlayers() .. " players", 2)
+	task.spawn(function()
+		while alive and playersLbl.Parent do
+			task.wait(8)
+			if playersLbl.Parent then playersLbl.Text = #Players:GetPlayers() .. " players" end
+		end
+	end)
+
+	-- key status: green countdown ring + restore button
+	if CONFIG.Key.Enabled then
+		local S, T = 64, 5
+		local kc = frame({ Size = UDim2.new(1, 0, 0, 88), BackgroundColor3 = C.card, LayoutOrder = nextOrder() }, list)
+		round(kc, 14)
+		stroke(kc, C.stroke, 1, 0.4)
+		local ringBox = frame({ Position = UDim2.fromOffset(14, 12), Size = UDim2.fromOffset(S, S), BackgroundTransparency = 1 }, kc)
+		local glow = make("ImageLabel", {
+			AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.fromOffset(S + 24, S + 24),
+			BackgroundTransparency = 1, BorderSizePixel = 0, Image = "rbxassetid://5554236805", ImageColor3 = C.green, ImageTransparency = 0.75,
+			ScaleType = Enum.ScaleType.Slice, SliceCenter = Rect.new(23, 23, 277, 277), SliceScale = 0.4, ZIndex = 0,
+		}, ringBox)
+		local disc = frame({ AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.fromOffset(S - 2 * T - 4, S - 2 * T - 4), BackgroundColor3 = C.green, BackgroundTransparency = 0.88 }, ringBox)
+		round(disc, 999)
+		local track = frame({ Position = UDim2.fromOffset(T, T), Size = UDim2.fromOffset(S - 2 * T, S - 2 * T), BackgroundTransparency = 1 }, ringBox)
+		round(track, 999)
+		local trackStroke = stroke(track, C.green, T, 0.85)
+		local function half(x, cx)
+			local clip = frame({ Position = UDim2.fromOffset(x, 0), Size = UDim2.fromOffset(S / 2, S), BackgroundTransparency = 1, ClipsDescendants = true }, ringBox)
+			local circ = frame({ Position = UDim2.fromOffset(cx, T), Size = UDim2.fromOffset(S - 2 * T, S - 2 * T), BackgroundTransparency = 1 }, clip)
+			round(circ, 999)
+			local st = stroke(circ, C.green, T, 0)
+			local g = make("UIGradient", {
+				Transparency = NumberSequence.new({
+					NumberSequenceKeypoint.new(0, 0), NumberSequenceKeypoint.new(0.5, 0),
+					NumberSequenceKeypoint.new(0.501, 1), NumberSequenceKeypoint.new(1, 1),
+				}),
+			}, st)
+			return st, g
+		end
+		local rSt, rG = half(S / 2, T - S / 2)
+		local lSt, lG = half(0, T)
+		local headGlow = make("ImageLabel", {
+			AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.fromOffset(22, 22), BackgroundTransparency = 1, BorderSizePixel = 0,
+			Image = "rbxassetid://5554236805", ImageColor3 = C.green, ImageTransparency = 0.5,
+			ScaleType = Enum.ScaleType.Slice, SliceCenter = Rect.new(23, 23, 277, 277), SliceScale = 0.3, ZIndex = 3, Visible = false,
+		}, ringBox)
+		local headDot = frame({ AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.fromOffset(8, 8), BackgroundColor3 = C.white, ZIndex = 4, Visible = false }, ringBox)
+		round(headDot, 4)
+		local ctr = label({ Text = "--", Font = Enum.Font.GothamBold, TextSize = 10, TextColor3 = C.green, TextXAlignment = Enum.TextXAlignment.Center, Size = UDim2.fromScale(1, 1), ZIndex = 5 }, ringBox)
+
+		label({ Text = "Access key", Font = Enum.Font.GothamBold, TextSize = 14, Position = UDim2.fromOffset(92, 10), Size = UDim2.new(1, -106, 0, 18) }, kc)
+		local statusLbl = label({ Text = "Not verified yet", TextSize = 11, TextColor3 = C.sub, TextTruncate = Enum.TextTruncate.AtEnd, Position = UDim2.fromOffset(92, 29), Size = UDim2.new(1, -106, 0, 14) }, kc)
+
+		local function compute()
+			local col, txt, p, status = C.green, "--", 0, "Not verified yet"
+			if keyState.known then
+				if keyState.exp then
+					local rem = keyState.exp - os.time()
+					if rem <= 0 then
+						col, txt, p, status = C.red, "Expired", 0, "This key has expired"
+					else
+						p = math.clamp(rem / (30 * 86400), 0.04, 1)
+						local d = math.floor(rem / 86400)
+						if d >= 1 then
+							txt = d .. "d " .. math.floor((rem % 86400) / 3600) .. "h"
+						else
+							txt = string.format("%02d:%02d:%02d", math.floor(rem / 3600), math.floor((rem % 3600) / 60), rem % 60)
+						end
+						if rem < 3600 then col = C.red elseif rem < 86400 then col = C.amber end
+						status = "Expires " .. os.date("%b %d, %Y", keyState.exp)
+					end
+				else
+					txt, p, status = "Lifetime", 1, "Never expires"
+				end
+			end
+			return col, txt, p, status
+		end
+
+		local shown, colNow = 0, C.green
+		bind(RS.RenderStepped, function(dt)
+			if not alive or not kc.Parent then return end
+			if not p.Visible then shown = 0 return end
+			local col, txt, target, status = compute()
+			shown = shown + (target - shown) * math.min(1, dt * 2.5)
+			colNow = colNow:Lerp(col, math.min(1, dt * 6))
+			local now = os.clock()
+			rG.Rotation = math.clamp(shown * 360, 0, 180)
+			lG.Rotation = math.clamp(shown * 360, 180, 360)
+			rSt.Color, lSt.Color, trackStroke.Color, ctr.TextColor3 = colNow, colNow, colNow, colNow
+			ctr.Text, statusLbl.Text = txt, status
+			local urgent = (col == C.red or col == C.amber)
+			local pulse = math.sin(now * (urgent and 5 or 2.2))
+			glow.ImageColor3 = colNow
+			glow.ImageTransparency = 0.72 + (urgent and 0.14 or 0.09) * pulse
+			local gs = S + 24 + 4 * pulse
+			glow.Size = UDim2.fromOffset(gs, gs)
+			disc.BackgroundColor3 = colNow
+			disc.BackgroundTransparency = 0.88 + 0.04 * pulse
+			trackStroke.Transparency = 0.85 + 0.05 * math.sin(now * 1.3)
+			local showHead = shown > 0.02 and shown < 0.995
+			headDot.Visible, headGlow.Visible = showHead, showHead
+			if showHead then
+				local ang = math.rad(shown * 360 - 90)
+				local rad = (S - T) / 2
+				local pos = UDim2.fromOffset(S / 2 + math.cos(ang) * rad, S / 2 + math.sin(ang) * rad)
+				headDot.Position, headGlow.Position = pos, pos
+				headGlow.ImageColor3 = colNow
+				headGlow.ImageTransparency = 0.45 + 0.15 * pulse
+			end
+		end)
+
+		local rb = Btn(kc, { Text = "Restore key", Icon = "refresh-cw", Size = UDim2.fromOffset(132, 26), Position = UDim2.fromOffset(92, 52), Radius = 8, TextSize = 12, IconSize = 13 })
+		local rbusy = false
+		bind(rb.Button.MouseButton1Click, function()
+			if rbusy then return end
+			rbusy = true
+			setBtn(rb, "Checking", "loader-circle")
+			spin(rb.Icon)
+			local ok, msg
+			if STATE.restoreKey then ok, msg = STATE.restoreKey() else ok, msg = false, "Key system isn't ready yet" end
+			unspin(rb.Icon)
+			if not alive then return end
+			if ok then
+				setBtn(rb, "Restored", "check")
+				Notify({ Title = "Key restored", Text = "Your saved key is valid.", Type = "success", Icon = "shield-check", Duration = 3 })
+			else
+				setBtn(rb, "Failed", "x")
+				Notify({ Title = "Couldn't restore key", Text = tostring(msg), Type = "error", Duration = 4 })
+			end
+			for sec = 6, 1, -1 do
+				if not alive or not kc.Parent then return end
+				setBtn(rb, "Wait " .. sec .. "s")
+				task.wait(1)
+			end
+			setBtn(rb, "Restore key", "refresh-cw")
+			rbusy = false
+		end)
+	end
+
+	-- latest update
+	section("Latest update")
+	local rel = CHANGELOG[1]
+	if rel then
+		local TAGS = { new = { "circle-plus", C.green }, improved = { "sparkles", C.blue }, fix = { "wrench", C.amber }, removed = { "trash", C.red } }
+		local blk = box(nextOrder(), 12)
+		local head = frame({ Size = UDim2.new(1, 0, 0, 22), BackgroundTransparency = 1, LayoutOrder = 1 }, blk)
+		label({ Text = "v" .. rel.version, Font = Enum.Font.GothamBold, TextSize = 14, TextColor3 = C.redHi, Size = UDim2.fromOffset(52, 22) }, head)
+		label({ Text = rel.date, TextSize = 11, TextColor3 = C.sub, Position = UDim2.fromOffset(54, 0), Size = UDim2.fromOffset(80, 22) }, head)
+		local all = Btn(head, { Text = "View all", Icon = "arrow-right", Style = "ghost", Size = UDim2.fromOffset(86, 22), AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, 0, 0.5, 0), Radius = 8, TextSize = 11, IconSize = 12 })
+		bind(all.Button.MouseButton1Click, function() showPage("Updates") end)
+		label({ Text = rel.title, Font = Enum.Font.GothamMedium, TextSize = 12, Size = UDim2.new(1, 0, 0, 16), LayoutOrder = 2 }, blk)
+		for j = 1, math.min(3, #rel.changes) do
+			local ch = rel.changes[j]
+			local tag = TAGS[ch[1]] or TAGS.new
+			local row = frame({ Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1, LayoutOrder = 2 + j }, blk)
+			local ic = Icon(row, tag[1], 14, tag[2])
+			ic.Position = UDim2.fromOffset(0, 1)
+			label({
+				Text = ch[2], TextSize = 12, TextColor3 = C.sub, TextWrapped = true, TextYAlignment = Enum.TextYAlignment.Top,
+				Position = UDim2.fromOffset(22, 0), Size = UDim2.new(1, -22, 0, 0), AutomaticSize = Enum.AutomaticSize.Y,
+			}, row)
+		end
+		if #rel.changes > 3 then
+			label({ Text = "+" .. (#rel.changes - 3) .. " more in the Updates tab", TextSize = 11, TextColor3 = P(110, 95, 104), Size = UDim2.new(1, 0, 0, 14), LayoutOrder = 9 }, blk)
+		end
+	end
+
+	-- quick access (tap a tile to run)
+	section("Quick access")
+	local quick = {}
+	for _, q in ipairs(CONFIG.QuickScripts or {}) do quick[#quick + 1] = q end
+	for _, q in ipairs(SCRIPTS) do
+		if q.url or q.slug then quick[#quick + 1] = q end
+	end
+	if #quick == 0 then
+		label({ Text = "No quick scripts yet. Add some in CONFIG.QuickScripts.", TextSize = 12, TextColor3 = C.sub, Size = UDim2.new(1, 0, 0, 18), LayoutOrder = nextOrder() }, list)
+	else
+		local qg = grid(64, #quick == 1 and 1 or 2)
+		for i, q in ipairs(quick) do
+			local tile = make("TextButton", { BackgroundColor3 = C.card, Text = "", AutoButtonColor = false, BorderSizePixel = 0, LayoutOrder = i }, qg)
+			round(tile, 12)
+			local st = stroke(tile, C.stroke, 1, 0.4)
+			local ibox = frame({ Size = UDim2.fromOffset(38, 38), Position = UDim2.fromOffset(12, 13), BackgroundColor3 = C.bg }, tile)
+			round(ibox, 10)
+			local ic = Icon(ibox, q.icon or "zap", 18, C.red)
+			ic.AnchorPoint = Vector2.new(0.5, 0.5)
+			ic.Position = UDim2.fromScale(0.5, 0.5)
+			label({ Text = q.name, Font = Enum.Font.GothamBold, TextSize = 13, TextTruncate = Enum.TextTruncate.AtEnd, Position = UDim2.fromOffset(60, 13), Size = UDim2.new(1, -68, 0, 18) }, tile)
+			local sub = label({ Text = q.desc or "Tap to run", TextSize = 11, TextColor3 = C.sub, TextTruncate = Enum.TextTruncate.AtEnd, Position = UDim2.fromOffset(60, 33), Size = UDim2.new(1, -68, 0, 16) }, tile)
+			bind(tile.MouseEnter, function() tween(st, 0.15, { Color = C.red, Transparency = 0.1 }) end)
+			bind(tile.MouseLeave, function() tween(st, 0.15, { Color = C.stroke, Transparency = 0.4 }) end)
+			local busy = false
+			bind(tile.MouseButton1Click, function()
+				if busy then return end
+				busy = true
+				sub.Text, sub.TextColor3 = "Running...", C.sub
+				local src, err = fetchEntrySource(q)
+				local ok = false
+				if src then ok, err = runCode(src) end
+				if not alive then return end
+				if ok then
+					sub.Text, sub.TextColor3 = "Executed", C.green
+					Notify({ Title = "Executed", Text = q.name, Type = "success", Duration = 3 })
+				else
+					sub.Text, sub.TextColor3 = "Failed", C.red
+					warn("[Shadow] " .. tostring(err))
+					Notify({ Title = "Execution failed", Text = tostring(err):sub(1, 90), Type = "error", Duration = 6 })
+				end
+				task.delay(2.5, function()
+					if alive and tile.Parent then sub.Text, sub.TextColor3 = q.desc or "Tap to run", C.sub end
+				end)
+				busy = false
+			end)
+		end
+	end
+
+	-- credits
+	section("Credits")
+	local devs = CONFIG.Developers or {}
+	local cg = grid(114, #devs == 1 and 1 or 2)
+	for i, d in ipairs(devs) do
+		local card = frame({ BackgroundColor3 = C.card, LayoutOrder = i }, cg)
+		round(card, 12)
+		stroke(card, C.stroke, 1, 0.4)
+		local _, img = avatar(card, 48, UDim2.new(0.5, -24, 0, 12), tostring(d.name):sub(1, 1):upper())
+		label({ Text = d.role, Font = Enum.Font.GothamBold, TextSize = 10, TextColor3 = C.redHi, TextXAlignment = Enum.TextXAlignment.Center, TextTruncate = Enum.TextTruncate.AtEnd, Position = UDim2.fromOffset(6, 66), Size = UDim2.new(1, -12, 0, 14) }, card)
+		label({ Text = d.name, Font = Enum.Font.GothamBold, TextSize = 14, TextXAlignment = Enum.TextXAlignment.Center, TextTruncate = Enum.TextTruncate.AtEnd, Position = UDim2.fromOffset(6, 82), Size = UDim2.new(1, -12, 0, 20) }, card)
+		if d.avatar and d.avatar ~= "" then loadRemoteAvatar(img, d.avatar, "avatar_" .. (d.avatar:match("/(%w+)%.%w+%?") or i) .. ".png") end
+	end
+
+	local dBtn = Btn(list, { Text = "Join our Discord", Icon = "link", Style = "blurple", Size = UDim2.new(1, 0, 0, 38), LayoutOrder = nextOrder(), Radius = 12, TextSize = 13 })
+	bind(dBtn.Button.MouseButton1Click, function()
+		if copyText(CONFIG.Discord) then
+			Notify({ Title = "Discord link copied", Text = "Paste it in your browser to join.", Type = "info", Icon = "link", Duration = 3 })
+		else
+			Notify({ Title = "Join our Discord", Text = CONFIG.Discord, Type = "info", Icon = "link", Duration = 8 })
+		end
+	end)
+end)
 
 safeBuild("Editor", function()
 	local p = newPage("Editor")
@@ -2826,37 +3269,11 @@ safeBuild("Settings", function()
 		saveSettings()
 	end)
 
-	Switch(Row("sparkles", "Title glitch", "Animated glitch on the title"), SETTINGS.Glitch, function(on)
-		SETTINGS.Glitch = on
-		saveSettings()
-	end)
-
-	Switch(Row("circle-dot", "Floating button", "Shown while the UI is hidden: tap to open, hold for the wheel"), SETTINGS.FloatButton, function(on)
+	Switch(Row("circle-dot", "Floating button", "Shown while the UI is hidden: tap to open, hold for the tab bar"), SETTINGS.FloatButton, function(on)
 		SETTINGS.FloatButton = on
 		saveSettings()
 		if floatApply then floatApply() end
 	end)
-
-	do
-		local row = Row("keyboard", "Hide / show hotkey", "Click, then press a key (Esc cancels)")
-		local btn = SmallBtn(row, toggleKey.Name, "pencil", "ghost", 120)
-		bind(btn.Button.MouseButton1Click, function()
-			if rebinding then return end
-			setBtn(btn, "Press a key...", "keyboard")
-			task.wait(0.15)
-			rebinding = function(kc)
-				rebinding = false
-				if kc ~= Enum.KeyCode.Escape and kc ~= Enum.KeyCode.Unknown then
-					toggleKey = kc
-					SETTINGS.ToggleKey = kc.Name
-					saveSettings()
-					updateHint()
-					Notify({ Title = "Hotkey changed", Text = "Press " .. kc.Name .. " to hide or show the UI.", Type = "success", Icon = "keyboard" })
-				end
-				setBtn(btn, toggleKey.Name, "pencil")
-			end
-		end)
-	end
 
 	Switch(Row("key", "Remember key", "Auto sign-in with your saved key"), SETTINGS.RememberKey, function(on)
 		SETTINGS.RememberKey = on
@@ -2899,79 +3316,87 @@ safeBuild("Settings", function()
 		end)
 	end
 
-	do
-		local row = Row("power", "Unload UI", "Close and remove the UI")
-		local btn = SmallBtn(row, "Unload", "power", "primary", 92)
-		bind(btn.Button.MouseButton1Click, function() cleanup() end)
-	end
-
 	label({ Text = "Shadow v" .. VERSION .. "  |  Made by " .. CONFIG.Credits, TextSize = 10, TextColor3 = P(110, 95, 104), TextXAlignment = Enum.TextXAlignment.Center, Size = UDim2.new(1, 0, 0, 20), LayoutOrder = 100 }, list)
 end)
 
 local KEYCFG = CONFIG.Key
 
+local function normalizeKey(k)
+	k = tostring(k or "")
+	for _, bad in ipairs({ "\226\128\139", "\226\128\140", "\226\128\141", "\239\187\191" }) do
+		k = k:gsub(bad, "")
+	end
+	return (k:gsub("[%s\"'`]+", ""):lower())
+end
+
 -- signed keys from the Discord bot ----------------------------------------
 -- SF-AAAA-BBBB-CCCC-SSSS never expires, ST-EEEE-AAAA-BBBB-SSSS works until the UTC
 -- day in EEEE. SSSS is a checksum with the secret, so keys work offline.
-local KEY_ALPHA = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
-local kbxor = (bit32 and bit32.bxor) or function(a, b)
-	local r, bit = 0, 1
-	while a > 0 or b > 0 do
-		if (a % 2) ~= (b % 2) then r = r + bit end
-		a, b, bit = math.floor(a / 2), math.floor(b / 2), bit * 2
+-- returns "valid", expiry-timestamp-or-nil  |  "expired"  |  nil (not a signed key)
+local signedKeyState
+do
+	local KEY_ALPHA = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+	local kbxor = (bit32 and bit32.bxor) or function(a, b)
+		local r, bit = 0, 1
+		while a > 0 or b > 0 do
+			if (a % 2) ~= (b % 2) then r = r + bit end
+			a, b, bit = math.floor(a / 2), math.floor(b / 2), bit * 2
+		end
+		return r
 	end
-	return r
-end
-local function kmul32(a, b)
-	local high, low = math.floor(a / 65536), a % 65536
-	return (((high * b) % 65536) * 65536 + low * b) % 4294967296
-end
-local function kfnv(text)
-	local h = 2166136261
-	for i = 1, #text do h = kmul32(kbxor(h, text:byte(i)), 16777619) end
-	return h
-end
-local function kencode(h, len)
-	local out = ""
-	for _ = 1, len do
-		local i = h % 32
-		out = out .. KEY_ALPHA:sub(i + 1, i + 1)
-		h = math.floor(h / 32)
+	local function kmul32(a, b)
+		local high, low = math.floor(a / 65536), a % 65536
+		return (((high * b) % 65536) * 65536 + low * b) % 4294967296
 	end
-	return out
-end
-local function kdecode(text)
-	local n = 0
-	for i = #text, 1, -1 do
-		local idx = KEY_ALPHA:find(text:sub(i, i), 1, true)
-		if not idx then return nil end
-		n = n * 32 + (idx - 1)
+	local function kfnv(text)
+		local h = 2166136261
+		for i = 1, #text do h = kmul32(kbxor(h, text:byte(i)), 16777619) end
+		return h
 	end
-	return n
-end
+	local function kencode(h, len)
+		local out = ""
+		for _ = 1, len do
+			local i = h % 32
+			out = out .. KEY_ALPHA:sub(i + 1, i + 1)
+			h = math.floor(h / 32)
+		end
+		return out
+	end
+	local function kdecode(text)
+		local n = 0
+		for i = #text, 1, -1 do
+			local idx = KEY_ALPHA:find(text:sub(i, i), 1, true)
+			if not idx then return nil end
+			n = n * 32 + (idx - 1)
+		end
+		return n
+	end
 
--- "valid", "expired" or nil (not a signed key)
-local function signedKeyState(input)
-	local secret = KEYCFG.Secret
-	if not secret or secret == "" then return nil end
-	local key = trim(input):upper()
-	local B = "([A-Z0-9][A-Z0-9][A-Z0-9][A-Z0-9])"
-	local a, b, c, sum = key:match("^SF%-" .. B .. "%-" .. B .. "%-" .. B .. "%-" .. B .. "$")
-	if a then
-		return kencode(kfnv(a .. b .. c .. secret), 4) == sum and "valid" or nil
+	signedKeyState = function(input)
+		local secret = KEYCFG.Secret
+		if not secret or secret == "" then return nil end
+		local key = normalizeKey(input):upper()
+		local B = "([A-Z0-9][A-Z0-9][A-Z0-9][A-Z0-9])"
+		local a, b, c, sum = key:match("^SF%-" .. B .. "%-" .. B .. "%-" .. B .. "%-" .. B .. "$")
+		if a then
+			return kencode(kfnv(a .. b .. c .. secret), 4) == sum and "valid" or nil, nil
+		end
+		local exp, x, y, sum2 = key:match("^ST%-" .. B .. "%-" .. B .. "%-" .. B .. "%-" .. B .. "$")
+		if exp and kencode(kfnv("T" .. exp .. x .. y .. secret), 4) == sum2 then
+			local lastDay = kdecode(exp)
+			if not lastDay then return nil end
+			if math.floor(os.time() / 86400) <= lastDay then
+				return "valid", (lastDay + 1) * 86400 - 1
+			end
+			return "expired"
+		end
+		return nil
 	end
-	local exp, x, y, sum2 = key:match("^ST%-" .. B .. "%-" .. B .. "%-" .. B .. "%-" .. B .. "$")
-	if exp and kencode(kfnv("T" .. exp .. x .. y .. secret), 4) == sum2 then
-		local lastDay = kdecode(exp)
-		if not lastDay then return nil end
-		return math.floor(os.time() / 86400) <= lastDay and "valid" or "expired"
-	end
-	return nil
 end
 
 local function parseKeys(body)
 	local list = {}
-	for line in tostring(body):gmatch("[^\r\n]+") do
+	for line in (tostring(body):gsub("^\239\187\191", "")):gmatch("[^\r\n]+") do
 		line = trim(line)
 		if line ~= "" and line:sub(1, 2) ~= "--" and line:sub(1, 1) ~= "#" then
 			local k, d = line:match("^(.-)%s*|%s*(%d+%-%d+%-%d+)$")
@@ -2981,40 +3406,76 @@ local function parseKeys(body)
 				local y, m, dd = d:match("(%d+)-(%d+)-(%d+)")
 				exp = os.time({ year = tonumber(y), month = tonumber(m), day = tonumber(dd), hour = 23, min = 59, sec = 59 })
 			end
-			list[#list + 1] = { key = trim(k):lower(), expires = exp }
+			list[#list + 1] = { key = normalizeKey(k), expires = exp }
 		end
 	end
 	return list
 end
 
+local function activationExpiry(key)
+	local days = KEYCFG.DefaultDays or 0
+	if days <= 0 then return nil end
+	local data = {}
+	local raw = fileRead("activations.json")
+	if raw then
+		local ok, d = pcall(function() return HttpService:JSONDecode(raw) end)
+		if ok and type(d) == "table" then data = d end
+	end
+	local t = tonumber(data[key])
+	if not t then
+		t = os.time()
+		data[key] = t
+		fileWrite("activations.json", HttpService:JSONEncode(data))
+	end
+	return t + days * 86400
+end
+
 local function validateKey(input)
-	local key = trim(input):lower()
+	local key = normalizeKey(input)
 	if key == "" then return false, "Enter your key first" end
-	local signed = signedKeyState(input)
-	if signed == "valid" then return true end
+	local signed, signedExp = signedKeyState(input)
+	if signed == "valid" then return true, signedExp end
 	if signed == "expired" then return false, "This key has expired" end
 	local entries = {}
-	for _, k in ipairs(KEYCFG.Keys or {}) do
-		entries[#entries + 1] = { key = trim(k):lower() }
-	end
+	for _, e in ipairs(parseKeys(table.concat(KEYCFG.Keys or {}, "\n"))) do entries[#entries + 1] = e end
 	local remoteFailed = false
 	if KEYCFG.RemoteUrl and KEYCFG.RemoteUrl ~= "" then
 		local sep = KEYCFG.RemoteUrl:find("?", 1, true) and "&" or "?"
 		local body = httpGet(KEYCFG.RemoteUrl .. sep .. "t=" .. os.time())
 		if body then
+			fileWrite("keys_cache.txt", os.time() .. "\n" .. body)
 			for _, e in ipairs(parseKeys(body)) do entries[#entries + 1] = e end
 		else
-			remoteFailed = true
+			local raw = fileRead("keys_cache.txt")
+			local ts, rest = nil, nil
+			if raw then ts, rest = raw:match("^(%d+)\n(.*)$") end
+			if ts and os.time() - tonumber(ts) <= (KEYCFG.OfflineHours or 48) * 3600 then
+				for _, e in ipairs(parseKeys(rest)) do entries[#entries + 1] = e end
+			else
+				remoteFailed = true
+			end
 		end
 	end
 	for _, e in ipairs(entries) do
 		if e.key == key then
-			if e.expires and os.time() > e.expires then return false, "This key has expired" end
-			return true
+			local exp = e.expires or activationExpiry(key)
+			if exp and os.time() > exp then return false, "This key has expired" end
+			return true, exp
 		end
 	end
-	if remoteFailed and #entries == 0 then return false, "Couldn't reach the key server" end
+	if remoteFailed then return false, "Couldn't reach the key server", true end
 	return false, "Invalid key"
+end
+
+STATE.restoreKey = function()
+	local saved = fileRead("key.txt")
+	if not saved or saved == "" then return false, "No saved key. Enter it again with Remember key on." end
+	local ok, exp = validateKey(saved)
+	if ok then
+		if STATE.keyInfo then STATE.keyInfo(exp) end
+		return true
+	end
+	return false, exp
 end
 
 local function unlockHub()
@@ -3022,7 +3483,7 @@ local function unlockHub()
 	unlocked = true
 	if STATE.dismissKey then STATE.dismissKey() end
 	if STATE.reveal then STATE.reveal() end
-	showPage("Editor")
+	showPage("Home")
 	if unread then
 		task.delay(0.9, function()
 			Notify({ Title = "What's new in v" .. VERSION, Text = "Open the Updates tab to see what changed.", Type = "info", Icon = "sparkles", Duration = 5 })
@@ -3104,6 +3565,19 @@ if KEYCFG.Enabled then
 			TextColor3 = C.text, Font = Enum.Font.Code, TextSize = 13, TextXAlignment = Enum.TextXAlignment.Left,
 			ClearTextOnFocus = false, ClipsDescendants = true,
 		}, inputRow)
+		local getClip = getclipboard or fromclipboard or (Clipboard and Clipboard.get)
+		if getClip then
+			keyBox.Size = UDim2.new(1, -82, 1, 0)
+			local pasteBtn = IconBtn(inputRow, "clipboard", 15, { Size = UDim2.fromOffset(28, 28), AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -5, 0.5, 0), BackgroundColor3 = C.bg })
+			bind(pasteBtn.MouseButton1Click, function()
+				local okC, txt = pcall(getClip)
+				if okC and type(txt) == "string" and trim(txt) ~= "" then
+					keyBox.Text = trim(txt)
+				else
+					Notify({ Title = "Clipboard empty", Text = "Copy your key first, then tap paste.", Type = "warn", Duration = 2.5 })
+				end
+			end)
+		end
 		bind(keyBox.Focused, function() tween(irs, 0.15, { Color = C.red, Transparency = 0.1 }) end)
 		bind(keyBox.FocusLost, function() tween(irs, 0.15, { Color = C.stroke, Transparency = 0.3 }) end)
 
@@ -3132,16 +3606,38 @@ if KEYCFG.Enabled then
 
 		local attempts, locked, busy = 0, false, false
 
-		local function onSuccess(silent)
+		local function onSuccess(silent, exp)
+			local note = ""
+			if exp then
+				local days = math.floor((exp - os.time()) / 86400)
+				note = days <= 0 and "Expires today" or ("Expires in " .. days .. " day" .. (days == 1 and "" or "s"))
+			end
+			if STATE.keyInfo then STATE.keyInfo(exp) end
 			tween(irs, 0.2, { Color = C.green, Transparency = 0 })
-			setStatus("Key accepted", C.green)
+			setStatus(note ~= "" and ("Key accepted  |  " .. note) or "Key accepted", C.green)
 			if KEYCFG.Remember then fileWrite("key.txt", trim(keyBox.Text)) end
 			Notify({
 				Title = silent and "Welcome back" or "Key accepted",
-				Text = silent and "Signed in with your saved key." or "Shadow unlocked.",
+				Text = (silent and "Signed in with your saved key." or "Shadow unlocked.") .. (note ~= "" and ("  " .. note .. ".") or ""),
 				Type = "success", Icon = "shield-check", Duration = 3,
 			})
 			task.delay(0.45, function() if alive then unlockHub() end end)
+		end
+
+		local function startLock(secs)
+			locked = true
+			task.spawn(function()
+				for sec = secs, 1, -1 do
+					if not alive then return end
+					setBtn(verifyBtn, "Locked " .. sec .. "s", "lock")
+					setStatus("Too many wrong keys, please wait", C.amber)
+					task.wait(1)
+				end
+				if not alive then return end
+				locked, attempts = false, 0
+				setBtn(verifyBtn, "Verify Key", "shield-check")
+				setStatus("", C.sub)
+			end)
 		end
 
 		local function verify(silent)
@@ -3151,18 +3647,24 @@ if KEYCFG.Enabled then
 			spin(verifyBtn.Icon)
 			setStatus("Checking key...", C.sub)
 
-			local ok, msg = validateKey(keyBox.Text)
+			local ok, msg, net = validateKey(keyBox.Text)
 			unspin(verifyBtn.Icon)
 			if not alive then return end
 
 			if ok then
 				setBtn(verifyBtn, "Unlocked", "check")
 				busy = false
-				onSuccess(silent)
+				onSuccess(silent, msg)
 				return
 			end
 
 			setBtn(verifyBtn, "Verify Key", "shield-check")
+			if net then
+				setStatus(msg .. ", try again", C.amber)
+				Notify({ Title = msg, Text = "Check your connection. This didn't use an attempt.", Type = "warn", Duration = 4 })
+				busy = false
+				return
+			end
 			if silent then
 				setStatus("Saved key is no longer valid", C.amber)
 				busy = false
@@ -3180,19 +3682,19 @@ if KEYCFG.Enabled then
 				locked = true
 				busy = false
 				Notify({ Title = "Too many attempts", Text = "Locked for " .. KEYCFG.LockSeconds .. " seconds", Type = "warn", Duration = 4 })
-				task.spawn(function()
-					for sec = KEYCFG.LockSeconds, 1, -1 do
-						if not alive then return end
-						setBtn(verifyBtn, "Locked " .. sec .. "s", "lock")
-						setStatus("Too many wrong keys, please wait", C.amber)
-						task.wait(1)
-					end
-					if not alive then return end
-					locked, attempts = false, 0
-					setBtn(verifyBtn, "Verify Key", "shield-check")
-					setStatus("", C.sub)
-				end)
+				fileWrite("lock.txt", tostring(os.time() + KEYCFG.LockSeconds))
+				startLock(KEYCFG.LockSeconds)
 			end
+		end
+
+		bind(keyBox:GetPropertyChangedSignal("Text"), function()
+			if busy or locked then return end
+			tween(irs, 0.15, { Color = C.stroke, Transparency = 0.3 })
+			setStatus("", C.sub)
+		end)
+		do
+			local untilT = tonumber(fileRead("lock.txt") or "")
+			if untilT and untilT > os.time() then startLock(math.ceil(untilT - os.time())) end
 		end
 
 		bind(verifyBtn.Button.MouseButton1Click, function() verify(false) end)
@@ -3240,7 +3742,7 @@ safeBuild("Float", function()
 local FAB = 48
 local fabHolder = frame({
 	Name = "FloatToggle", AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.fromOffset(64, 64),
-	Position = UDim2.fromOffset(40, math.floor(vp.Y / 2)), BackgroundTransparency = 1, ZIndex = 90,
+	Position = UDim2.fromOffset(math.floor(vp.X / 2), TOP_INSET + 10 + 24), BackgroundTransparency = 1, ZIndex = 90,
 	Visible = false,
 }, gui)
 local fabRing = frame({ AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.fromOffset(FAB + 10, FAB + 10), BackgroundTransparency = 1 }, fabHolder)
@@ -3267,6 +3769,7 @@ local fabDot = frame({ AnchorPoint = Vector2.new(1, 1), Position = UDim2.new(1, 
 round(fabDot, 6)
 stroke(fabDot, C.bg, 2, 0)
 
+local pressStart = Vector2.new()
 local function fabState()
 	tween(fabDot, 0.2, { BackgroundColor3 = hidden and P(110, 95, 104) or C.green })
 end
@@ -3298,122 +3801,86 @@ if not unlocked then return end
 	floatApply()
 end
 
-local WHEEL_R, ITEM = 90, 50
-local wheelItems = {
-	{ name = "Editor",     icon = "code",           tab = "Editor" },
-	{ name = "ScriptBlox", icon = "search",         tab = "ScriptBlox" },
-	{ name = "Updates",    icon = "scroll-text",    tab = "Updates" },
-	{ name = "Settings",   icon = "settings",       tab = "Settings" },
-	{ name = "Hide / Show", icon = "eye-off",       toggle = true },
+local BAR_H, SLOT, PADX = 60, 66, 10
+local barItems = {
+	{ name = "Home",       icon = "house",       tab = "Home" },
+	{ name = "Editor",     icon = "code",        tab = "Editor" },
+	{ name = "ScriptBlox", icon = "search",      tab = "ScriptBlox" },
+	{ name = "Console",    icon = "terminal",    tab = "Console", optional = true },
+	{ name = "Updates",    icon = "scroll-text", tab = "Updates" },
+	{ name = "Settings",   icon = "settings",    tab = "Settings" },
 }
 
 local WS = {
-	open = false, sel = nil, step = 60, chosen = nil,
+	open = false, sel = nil, chosen = nil,
 	vis = 0, visV = 0,
-	spinPos = 0, spinVel = 0, spinTarget = 0,
-	openT = 0, labelKick = 0, orbScale = 1,
-	pointerAng = 0, pointerOn = 0, pointerTarget = nil,
-	parX = 0, parY = 0, parTX = 0, parTY = 0,
+	active = {}, barW = 0, slotW = 0, left = 0, hlX = 0, hlV = 0, hlA = 0,
 }
-local V = {}
 
-local CANVAS = (WHEEL_R + ITEM + 64) * 2
-local wheelCanvas = make("CanvasGroup", {
-	Name = "Wheel", AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.fromOffset(CANVAS, CANVAS), BackgroundTransparency = 1,
+local function placeFab()
+	local vs = gui.AbsoluteSize
+	if vs.X > 0 then fabHolder.Position = UDim2.fromOffset(math.floor(vs.X / 2), TOP_INSET + 10 + FAB / 2) end
+end
+placeFab()
+pcall(function()
+	bind(GuiService:GetPropertyChangedSignal("TopbarInset"), function()
+		local old = TOP_INSET
+		TOP_INSET = readTopInset()
+		if TOP_INSET == old then return end
+		root.Size = UDim2.new(1, -MARGIN * 2, 1, -MARGIN * 2 - TOP_INSET)
+		root.Position = UDim2.new(0.5, 0, 0.5, TOP_INSET / 2)
+		NPOS.TopRight.pos = UDim2.new(1, -14, 0, 14 + TOP_INSET)
+		NPOS.TopLeft.pos = UDim2.new(0, 14, 0, 14 + TOP_INSET)
+		if not npos.bottom then notifHolder.Position = npos.pos end
+		placeFab()
+	end)
+end)
+
+local function barPos(e)
+	return UDim2.fromOffset(fabHolder.Position.X.Offset, fabHolder.Position.Y.Offset + FAB / 2 + 8 - (1 - math.clamp(e, 0, 1)) * 16)
+end
+
+local bar = make("CanvasGroup", {
+	Name = "TabBar", AnchorPoint = Vector2.new(0.5, 0), Size = UDim2.fromOffset(FAB, 0),
+	Position = barPos(0), BackgroundColor3 = P(14, 12, 16), BackgroundTransparency = 0.04,
 	BorderSizePixel = 0, ZIndex = 95, Visible = false, GroupTransparency = 1, Interactable = false,
 }, gui)
-local wheelRoot = frame({ Name = "Center", AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.new(), BackgroundTransparency = 1 }, wheelCanvas)
-local wheelFit = make("UIScale", { Scale = 1 }, wheelRoot)
+round(bar, 999)
+local barStroke = stroke(bar, C.white, 1.6, 0.2)
+local barGrad = make("UIGradient", {
+	Color = ColorSequence.new({ ColorSequenceKeypoint.new(0, C.redHi), ColorSequenceKeypoint.new(0.5, P(50, 12, 20)), ColorSequenceKeypoint.new(1, C.redHi) }),
+}, barStroke)
+local barContent = frame({
+	AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
+	Size = UDim2.fromOffset(100, BAR_H), BackgroundTransparency = 1,
+}, bar)
 
-local function glowImg(parent, z, slice, transp)
-	local g = make("ImageLabel", {
-		AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(), Size = UDim2.new(), BackgroundTransparency = 1, BorderSizePixel = 0,
-		Image = "rbxassetid://5554236805", ImageColor3 = C.white, ImageTransparency = transp,
-		ScaleType = Enum.ScaleType.Slice, SliceCenter = Rect.new(23, 23, 277, 277), SliceScale = slice, ZIndex = z,
-	}, parent)
-	local gr = make("UIGradient", { Color = glowColors(), Rotation = 45 }, g)
-	return g, gr
-end
-local function circle(z, color, transp)
-	local f = frame({ AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(), Size = UDim2.new(), BackgroundColor3 = color, BackgroundTransparency = transp, ZIndex = z }, wheelRoot)
-	round(f, 999)
-	return f
-end
-local function rimGradient()
-	return ColorSequence.new({ ColorSequenceKeypoint.new(0, C.redHi), ColorSequenceKeypoint.new(0.5, P(50, 12, 20)), ColorSequenceKeypoint.new(1, C.redHi) })
-end
+local hl = frame({
+	AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.fromOffset(60, BAR_H - 16),
+	BackgroundColor3 = C.white, BackgroundTransparency = 1, ZIndex = 1,
+}, barContent)
+round(hl, 14)
+gradient(hl, C.redHi, C.red2, 90)
+local hlStroke = stroke(hl, C.white, 1, 1)
 
-V.aura, V.auraGrad = glowImg(wheelRoot, 0, 2.2, 0.6)
-V.disc = circle(1, P(10, 8, 12), 1)
-V.discStroke = stroke(V.disc, C.white, 1.5, 1)
-V.discGrad = make("UIGradient", { Color = rimGradient() }, V.discStroke)
-V.track = circle(1, C.white, 1)
-V.trackStroke = stroke(V.track, C.redHi, 1.5, 1)
-
-local NT = 40
-V.ticks = {}
-for i = 1, NT do
-	local t = frame({ AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.fromOffset(2, 7), BackgroundColor3 = C.redHi, BackgroundTransparency = 1, ZIndex = 1 }, wheelRoot)
-	round(t, 1)
-	V.ticks[i] = t
-end
-V.beam = frame({ AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.fromOffset(3, 10), BackgroundColor3 = C.redHi, BackgroundTransparency = 1, ZIndex = 1 }, wheelRoot)
-round(V.beam, 2)
-make("UIGradient", { Rotation = 90, Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 1), NumberSequenceKeypoint.new(1, 0.15) }) }, V.beam)
-
-V.flash = circle(2, C.white, 1)
-V.burst = circle(1, C.white, 1)
-V.burstStroke = stroke(V.burst, C.redHi, 3, 1)
-V.selRing = circle(2, C.white, 1)
-V.selRing.Visible = false
-V.selStroke = stroke(V.selRing, C.white, 2, 0.1)
-make("UIGradient", { Color = glowColors(), Rotation = 0 }, V.selStroke)
-V.label = label({
-	Text = "", Font = Enum.Font.GothamBold, TextSize = 13, TextXAlignment = Enum.TextXAlignment.Center,
-	AnchorPoint = Vector2.new(0.5, 0), Position = UDim2.fromOffset(0, 38), Size = UDim2.fromOffset(160, 18), TextTransparency = 1, ZIndex = 3,
-	TextStrokeColor3 = C.redHi, TextStrokeTransparency = 0.7,
-}, wheelRoot)
-
-local SHEEN = NumberSequence.new({
-	NumberSequenceKeypoint.new(0, 1), NumberSequenceKeypoint.new(0.4, 1), NumberSequenceKeypoint.new(0.5, 0.66),
-	NumberSequenceKeypoint.new(0.6, 1), NumberSequenceKeypoint.new(1, 1),
-})
-for i, it in ipairs(wheelItems) do
-	local glow = glowImg(wheelRoot, 1, 1.3, 1)
-	it.glow = glow
-	it.glowScale = make("UIScale", { Scale = 0 }, glow)
-	local g = make("CanvasGroup", {
-		AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.fromOffset(ITEM, ITEM), BackgroundColor3 = P(26, 20, 30),
-		BorderSizePixel = 0, GroupTransparency = 1, ZIndex = 2,
-	}, wheelRoot)
-	round(g, ITEM / 2)
-	it.stroke = stroke(g, C.white, 1.6, 0.4)
-	make("UIGradient", {
-		Color = ColorSequence.new({ ColorSequenceKeypoint.new(0, C.white), ColorSequenceKeypoint.new(0.55, C.redHi), ColorSequenceKeypoint.new(1, C.red2) }),
-		Rotation = 90,
-	}, it.stroke)
-	it.scale = make("UIScale", { Scale = 0 }, g)
-
-	local shade = frame({ Size = UDim2.fromScale(1, 1), BackgroundColor3 = Color3.new(0, 0, 0) }, g)
-	make("UIGradient", { Rotation = 90, Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 1), NumberSequenceKeypoint.new(1, 0.55) }) }, shade)
-	it.fill = frame({ Size = UDim2.fromScale(1, 1), BackgroundColor3 = C.white, BackgroundTransparency = 1 }, g)
-	gradient(it.fill, C.redHi, C.red2, 60)
-	local sheen = frame({ Size = UDim2.fromScale(1, 1), BackgroundColor3 = C.white, ZIndex = 2 }, g)
-	it.sheenGrad = make("UIGradient", { Rotation = 30, Transparency = SHEEN, Offset = Vector2.new(2, 0) }, sheen)
-	local spec = frame({ Position = UDim2.fromOffset(11, 8), Size = UDim2.fromOffset(15, 7), BackgroundColor3 = C.white, BackgroundTransparency = 0.62, Rotation = -28, ZIndex = 2 }, g)
-	round(spec, 4)
-
-	it.ic = Icon(g, it.icon, 22, C.sub)
-	it.ic.AnchorPoint = Vector2.new(0.5, 0.5)
-	it.ic.Position = UDim2.fromScale(0.5, 0.5)
-	it.ic.ZIndex = 3
-	it.spark = Icon(g, "sparkle", 12, C.white)
-	it.spark.Position = UDim2.new(1, -18, 0, 5)
-	it.spark.ZIndex = 3
-	it.spark.ImageTransparency = 1
-	it.group = g
-	it.hm, it.hmT, it.rm, it.rmT = 1, 1, 1, 1
-	it.sp, it.sv, it.kick, it.glowT = 0, 0, 0, 0.84
+for _, it in ipairs(barItems) do
+	it.hm, it.hmT, it.lift, it.liftT = 1, 1, 0, 0
+	local cell = frame({
+		AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.fromOffset(60, BAR_H - 16),
+		BackgroundColor3 = C.white, BackgroundTransparency = 1, Visible = false,
+	}, barContent)
+	round(cell, 14)
+	gradient(cell, C.redHi, C.red2, 90)
+	it.scale = make("UIScale", { Scale = 0 }, cell)
+	it.ic = Icon(cell, it.icon, 20, C.sub)
+	it.ic.AnchorPoint = Vector2.new(0.5, 0)
+	it.ic.Position = UDim2.new(0.5, 0, 0, 6)
+	it.lbl = label({
+		Text = it.name, Font = Enum.Font.GothamMedium, TextSize = 10, TextColor3 = C.sub,
+		TextXAlignment = Enum.TextXAlignment.Center, AnchorPoint = Vector2.new(0.5, 1),
+		Position = UDim2.new(0.5, 0, 1, -4), Size = UDim2.new(1, 0, 0, 12),
+	}, cell)
+	it.cell = cell
 end
 
 local function spring(pos, vel, target, k, c, dt)
@@ -3426,146 +3893,79 @@ local function spring(pos, vel, target, k, c, dt)
 	return pos, vel
 end
 
-local function layoutWheel()
-
-	local c = fabHolder.Position
-	local cx, cy = c.X.Offset, c.Y.Offset
+local function layoutBar()
 	local vs = gui.AbsoluteSize
-	local fit = wheelFit.Scale
-	local m = (ITEM / 2) * fit * 1.25 + 6
-	local rad = WHEEL_R * fit
-	local n = #wheelItems
-	local STEP = 3
-	local okAt, allOk = {}, true
-	for a = 0, 359, STEP do
-		local x = cx + math.cos(math.rad(a)) * rad
-		local y = cy + math.sin(math.rad(a)) * rad
-		local good = x >= m and x <= vs.X - m and y >= m and y <= vs.Y - m
-		okAt[a] = good
-		if not good then allOk = false end
+	placeFab()
+	bar.Position = barPos(0)
+	WS.active = {}
+	for _, it in ipairs(barItems) do
+		local on = (not it.optional) or SETTINGS.Console
+		it.cell.Visible = on
+		if on then WS.active[#WS.active + 1] = it end
 	end
-	if allOk then
-		for i, it in ipairs(wheelItems) do it.angle = -90 + (i - 1) * 360 / n end
-		WS.step, WS.orbScale = 360 / n, 1
-		return
+	local n = #WS.active
+	WS.barW = math.max(math.min(n * SLOT + PADX * 2, vs.X - 16), FAB)
+	WS.left = (vs.X - WS.barW) / 2
+	WS.slotW = (WS.barW - PADX * 2) / n
+	barContent.Size = UDim2.fromOffset(WS.barW, BAR_H)
+	for k, it in ipairs(WS.active) do
+		it.cx = PADX + (k - 0.5) * WS.slotW
+		it.cell.Position = UDim2.fromOffset(it.cx, BAR_H / 2)
+		it.cell.Size = UDim2.fromOffset(math.clamp(WS.slotW - 8, 36, 64), BAR_H - 16)
 	end
-
-	local bestStart, bestLen = nil, 0
-	for a = 0, 359, STEP do
-		if okAt[a] and not okAt[(a - STEP) % 360] then
-			local len, b = 0, a
-			while okAt[b % 360] and len < 360 do
-				len = len + STEP
-				b = b + STEP
-			end
-			if len > bestLen then bestStart, bestLen = a, len end
-		end
-	end
-	if not bestStart or bestLen < 45 then
-
-		bestStart, bestLen = math.deg(math.atan2(vs.Y / 2 - cy, vs.X / 2 - cx)) - 85, 170
-	end
-	local inset = math.min(6, bestLen * 0.05)
-	local span = math.max(bestLen - STEP - inset * 2, 10)
-	for i, it in ipairs(wheelItems) do
-		it.angle = bestStart + inset + (i - 1) * span / (n - 1)
-	end
-	WS.step = span / (n - 1)
-	local chord = 2 * WHEEL_R * math.sin(math.rad(WS.step) / 2)
-	WS.orbScale = math.clamp(chord / (ITEM + 8), 0.72, 1)
+	hl.Size = UDim2.fromOffset(math.clamp(WS.slotW - 8, 36, 64), BAR_H - 16)
 end
 
-local function setWheelSel(it)
+local function setBarSel(it)
 	if WS.sel == it then return end
+	if it and not WS.sel then WS.hlX, WS.hlV = it.cx, 0 end
 	WS.sel = it
-	for _, w in ipairs(wheelItems) do
+	for _, w in ipairs(barItems) do
 		local on = (w == it)
-		w.hmT = on and 1.22 or (it and 0.88 or 1)
-		w.rmT = on and 1.14 or 1
-		w.glowT = on and 0.24 or 0.84
-		if on then w.kick = 1 end
-		tween(w.stroke, 0.15, { Transparency = on and 0 or 0.4 })
-		tween(w.fill, 0.18, { BackgroundTransparency = on and 0.05 or 1 })
-		tween(w.spark, 0.2, { ImageTransparency = on and 0 or 1 })
+		w.hmT = on and 1.08 or (it and 0.95 or 1)
+		w.liftT = on and -2 or 0
+		tween(w.lbl, 0.15, { TextColor3 = on and C.white or C.sub })
 		tintIcon(w.ic, on and C.white or C.sub)
 	end
-	WS.labelKick = 1
-	V.selRing.Visible = it ~= nil
-	if it then
-		V.label.Text = it.toggle and (hidden and "Show UI" or "Hide UI") or it.name
-		if it.toggle then setIcon(it.ic, hidden and "eye" or "eye-off") end
-		if WS.pointerOn < 0.05 then WS.pointerAng = it.angle end
-		WS.pointerTarget = it.angle
-	else
-		V.label.Text = "Drag to choose"
-		WS.pointerTarget = nil
-	end
-end
-
-local function shockwave(from, strength)
-	V.burst.Size = UDim2.fromOffset(from, from)
-	V.burstStroke.Transparency = strength
-	tween(V.burst, 0.6, { Size = UDim2.fromOffset((WHEEL_R + 70) * 2, (WHEEL_R + 70) * 2) }, Enum.EasingStyle.Quint)
-	tween(V.burstStroke, 0.6, { Transparency = 1 }, Enum.EasingStyle.Quad)
 end
 
 local function openWheel()
-	wheelCanvas.Position = fabHolder.Position
-	local vsz = gui.AbsoluteSize
-	wheelFit.Scale = math.clamp(math.min(vsz.X, vsz.Y) / (CANVAS + 16), 0.62, 1)
-	layoutWheel()
-	wheelCanvas.GroupTransparency = 1
-	wheelCanvas.Visible = true
-	V.flash.Position = UDim2.new()
-	setIcon(wheelItems[5].ic, hidden and "eye" or "eye-off")
-	WS.chosen, WS.pointerOn, WS.parTX, WS.parTY = nil, 0, 0, 0
-	WS.sel = false
-	setWheelSel(nil)
-	if WS.vis < 0.02 then
-		for _, it in ipairs(wheelItems) do it.sp, it.sv = 0, 0 end
+	layoutBar()
+	for _, it in ipairs(barItems) do
+		if it.toggle then
+			setIcon(it.ic, hidden and "eye" or "eye-off")
+			it.lbl.Text = hidden and "Show UI" or "Hide UI"
+		end
 	end
-	WS.open, WS.openT = true, 0
-	WS.spinPos, WS.spinVel, WS.spinTarget = 330, 0, 0
+	bar.GroupTransparency = 1
+	bar.Size = UDim2.fromOffset(FAB, 0)
+	bar.Visible = true
+	WS.sel = false
+	setBarSel(nil)
+	WS.chosen = nil
+	if WS.vis < 0.02 then WS.vis, WS.visV = 0, 0 end
+	WS.open = true
 	tween(fabScale, 0.2, { Scale = 0.9 })
-
-	V.flash.Size = UDim2.fromOffset(FAB, FAB)
-	V.flash.BackgroundTransparency = 0.55
-	tween(V.flash, 0.5, { Size = UDim2.fromOffset(WHEEL_R * 2 + 30, WHEEL_R * 2 + 30), BackgroundTransparency = 1 }, Enum.EasingStyle.Quint)
-	shockwave(FAB, 0.1)
 end
 
 local function closeWheel(chosen)
 	WS.chosen = chosen
-	WS.open, WS.openT = false, 0
-	WS.spinTarget = -260
+	if chosen then chosen.hmT, chosen.liftT = 1.1, -2 end
+	WS.open = false
 	tween(fabScale, 0.2, { Scale = 1 })
-	if chosen then
-		shockwave(FAB * 1.2, 0)
-		local ang = math.rad(chosen.angle)
-		V.flash.Position = UDim2.fromOffset(math.cos(ang) * WHEEL_R, math.sin(ang) * WHEEL_R)
-		V.flash.Size = UDim2.fromOffset(ITEM, ITEM)
-		V.flash.BackgroundTransparency = 0.5
-		tween(V.flash, 0.4, { Size = UDim2.fromOffset(ITEM * 2.6, ITEM * 2.6), BackgroundTransparency = 1 }, Enum.EasingStyle.Quint)
-	end
 end
 
-local function pickWheel(delta)
-	if delta.Magnitude < 26 then return nil end
-	local ang = math.deg(math.atan2(delta.Y, delta.X))
-	local best, bestDiff
-	for _, it in ipairs(wheelItems) do
-		local diff = math.abs(((ang - it.angle + 180) % 360) - 180)
-		if not bestDiff or diff < bestDiff then best, bestDiff = it, diff end
-	end
-	if bestDiff and bestDiff <= WS.step / 2 + 6 then return best end
-	return nil
+local function pickBar(x, delta)
+	if math.abs(delta.X) < 16 and math.abs(delta.Y) < 16 then return nil end
+	if delta.Y > 160 then return nil end
+	local rel = x - WS.left - PADX
+	if rel < 0 or rel > WS.barW - PADX * 2 then return nil end
+	return WS.active[math.min(math.floor(rel / WS.slotW) + 1, #WS.active)]
 end
 
 local function hideWheel()
 	WS.open, WS.vis, WS.visV, WS.chosen = false, 0, 0, nil
-	wheelCanvas.Visible = false
-	fabIcon.Rotation = 0
-	V.flash.Position = UDim2.new()
+	bar.Visible = false
 	tween(fabScale, 0.1, { Scale = 1 })
 end
 
@@ -3587,150 +3987,40 @@ local function wheelAction(it)
 	if hidden then task.delay(0.32, go) else go() end
 end
 
-local STAGGER_IN, STAGGER_OUT = 0.05, 0.03
 bind(RS.RenderStepped, function(dt)
 	local now = os.clock()
 	fabRingGrad.Rotation = (now * 90) % 360
 	local settled = (not WS.open) and WS.vis < 0.004 and math.abs(WS.visV) < 0.02
 	if settled then
-		if wheelCanvas.Visible then
-			wheelCanvas.Visible = false
-			fabIcon.Rotation = 0
+		if bar.Visible then
+			bar.Visible = false
 			WS.chosen = nil
 		end
 		return
 	end
-	dt = math.min(dt, 1 / 30)
-	WS.openT = WS.openT + dt
-
-	WS.vis, WS.visV = spring(WS.vis, WS.visV, WS.open and 1 or 0, 150, 16, dt)
-	WS.spinPos, WS.spinVel = spring(WS.spinPos, WS.spinVel, WS.spinTarget, 55, 9, dt)
-	local ed = math.max(WS.vis, 0)
-	local fade = math.clamp(WS.vis * 1.6, 0, 1)
-	wheelCanvas.GroupTransparency = 1 - math.clamp(WS.vis * 2.5, 0, 1)
-
-	local pk = math.min(1, dt * 9)
-	WS.parX = WS.parX + (WS.parTX - WS.parX) * pk
-	WS.parY = WS.parY + (WS.parTY - WS.parY) * pk
-	local px, py = WS.parX, WS.parY
-
-	local A = math.min((WHEEL_R + ITEM + 58) * 2 * ed, CANVAS - 4)
-	V.aura.Size = UDim2.fromOffset(A, A)
-	V.aura.Position = UDim2.fromOffset(px * 0.04, py * 0.04)
-	V.aura.ImageTransparency = 0.6 + (1 - fade) * 0.4 + 0.05 * math.sin(now * 2.2)
-	V.auraGrad.Rotation = (45 + now * 30 + WS.spinPos * 0.3) % 360
-	local d = (WHEEL_R + ITEM / 2 + 12) * 2 * ed
-	V.disc.Size = UDim2.fromOffset(d, d)
-	V.disc.Position = UDim2.fromOffset(px * 0.05, py * 0.05)
-	V.disc.BackgroundTransparency = 1 - 0.55 * fade
-	V.discStroke.Transparency = 1 - 0.8 * fade
-	V.discGrad.Rotation = (now * 140 + WS.spinPos * 0.5) % 360
-	local td = WHEEL_R * 2 * ed
-	V.track.Size = UDim2.fromOffset(td, td)
-	V.trackStroke.Transparency = 1 - 0.5 * fade
-
-	WS.labelKick = WS.labelKick * math.exp(-dt * 11)
-	V.label.Position = UDim2.fromOffset(0, 38 + 7 * WS.labelKick)
-	V.label.TextTransparency = 1 - fade * (1 - 0.7 * WS.labelKick)
-	V.label.TextStrokeTransparency = 1 - fade * 0.4
-	fabIcon.Rotation = 360 * math.clamp(WS.vis, 0, 1.05)
-
-	for k, t in ipairs(V.ticks) do
-		local deg = (k - 1) * 360 / NT + WS.spinPos * 0.35 + now * 5
-		local a = math.rad(deg)
-		local r = (WHEEL_R + 36) * ed
-		local prox = 0
-		if WS.pointerOn > 0.02 then
-			local diff = math.abs(((deg - WS.pointerAng + 180) % 360) - 180)
-			prox = math.clamp(1 - diff / 32, 0, 1) * WS.pointerOn
-		end
-		t.Position = UDim2.fromOffset(math.cos(a) * r + px * 0.03, math.sin(a) * r + py * 0.03)
-		t.Rotation = deg + 90
-		t.Size = UDim2.fromOffset(2, 6 + 7 * prox)
-		t.BackgroundTransparency = 1 - math.clamp(fade * (0.16 + 0.1 * math.sin(now * 2 + k * 0.5) + 0.7 * prox), 0, 1)
-	end
-
-	local show = WS.pointerTarget ~= nil and WS.open
-	WS.pointerOn = WS.pointerOn + ((show and 1 or 0) - WS.pointerOn) * math.min(1, dt * 14)
-	if WS.pointerTarget then
-		local diff = ((WS.pointerTarget - WS.pointerAng + 180) % 360) - 180
-		WS.pointerAng = WS.pointerAng + diff * math.min(1, dt * 18)
-	end
-	local pa = math.rad(WS.pointerAng)
-	local bl = math.max((WHEEL_R - ITEM / 2 - 30) * ed, 1)
-	V.beam.Size = UDim2.fromOffset(3, bl)
-	V.beam.Position = UDim2.fromOffset(math.cos(pa) * (28 * ed + bl / 2) + px * 0.06, math.sin(pa) * (28 * ed + bl / 2) + py * 0.06)
-	V.beam.Rotation = math.deg(pa) + 90
-	V.beam.BackgroundTransparency = 1 - WS.pointerOn * fade * 0.9
-
-	local n = #wheelItems
-	local k = math.min(1, dt * 16)
-	local sel = WS.sel
-	for i, it in ipairs(wheelItems) do
-		local target
-		if WS.open then
-			target = (WS.openT >= (i - 1) * STAGGER_IN) and 1 or 0
-		else
-			target = (WS.openT >= (n - i) * STAGGER_OUT) and 0 or 1
-		end
-		it.sp, it.sv = spring(it.sp, it.sv, target, 175, 13, dt)
-		local e = math.max(it.sp, 0)
+	barGrad.Rotation = (now * 70) % 360
+	WS.vis, WS.visV = spring(WS.vis, WS.visV, WS.open and 1 or 0, 170, 17, dt)
+	local e = math.max(WS.vis, 0)
+	bar.Size = UDim2.fromOffset(FAB + (WS.barW - FAB) * e, BAR_H * math.clamp(e, 0, 1.04))
+	bar.Position = barPos(e)
+	bar.GroupTransparency = 1 - math.clamp(WS.vis * 3, 0, 1)
+	local k = math.min(1, dt * 18)
+	for _, it in ipairs(WS.active) do
+		local dist = math.abs(it.cx - WS.barW / 2) / (WS.barW / 2)
 		it.hm = it.hm + (it.hmT - it.hm) * k
-		it.rm = it.rm + (it.rmT - it.rm) * k
-		it.kick = it.kick * math.exp(-dt * 9)
-
-		local ang, r, sc, tr, glowTr, glowSc
-		if it == WS.chosen and not WS.open then
-			local exit = 1 - math.clamp(WS.vis, 0, 1)
-			ang = math.rad(it.angle)
-			r = WHEEL_R * it.rm
-			sc = (1 + 0.9 * exit) * it.hm * WS.orbScale
-			tr = exit
-			glowTr = math.clamp(0.1 + exit * 0.9, 0, 1)
-			glowSc = sc * (1 + 1.1 * exit)
-		else
-			ang = math.rad(it.angle + WS.spinPos + (1 - math.clamp(it.sp, 0, 1)) * 110)
-			r = WHEEL_R * e * it.rm
-			sc = e * it.hm * (1 + 0.18 * it.kick) * WS.orbScale
-			tr = 1 - math.clamp(it.sp * 2, 0, 1)
-			local pulse = (it == sel) and (0.06 * math.sin(now * 6)) or (0.04 * math.sin(now * 2 + i))
-			glowTr = math.clamp(it.glowT + pulse + (1 - math.clamp(it.sp, 0, 1)) * 0.4, 0, 1)
-			glowSc = sc
-		end
-		local x, y = math.cos(ang) * r + px * 0.1, math.sin(ang) * r + py * 0.1
-		it.group.Position = UDim2.fromOffset(x, y)
-		it.scale.Scale = math.max(sc, 0)
-		it.group.GroupTransparency = tr
-		it.glow.Size = UDim2.fromOffset(ITEM + 56, ITEM + 56)
-		it.glow.Position = UDim2.fromOffset(x, y)
-		it.glowScale.Scale = math.max(glowSc, 0)
-		it.glow.ImageTransparency = glowTr
-		it.spark.Rotation = (now * 120) % 360
-		local st = (it == sel) and (((now * 1.5) % 1.5) / 0.9) or (((now * 0.8 + i * 0.37) % 3.4) / 0.9)
-		it.sheenGrad.Offset = Vector2.new(st < 1 and (-1 + 2 * st) or 2, 0)
-		if it == sel then
-			V.selRing.Position = UDim2.fromOffset(x, y)
-			local rs = (ITEM + 14) * math.max(sc, 0) * (1 + 0.05 * math.sin(now * 7))
-			V.selRing.Size = UDim2.fromOffset(rs, rs)
-			V.selStroke.Transparency = 0.1 + (1 - fade) * 0.9
-		end
+		it.lift = it.lift + (it.liftT - it.lift) * k
+		it.scale.Scale = math.clamp((e - dist * 0.55) / 0.45, 0, 1.08) * it.hm
+		it.cell.Position = UDim2.fromOffset(it.cx, BAR_H / 2 + it.lift)
 	end
+	if WS.sel then WS.hlX, WS.hlV = spring(WS.hlX, WS.hlV, WS.sel.cx, 380, 26, dt) end
+	WS.hlA = WS.hlA + (((WS.sel or WS.chosen) and 1 or 0) - WS.hlA) * k
+	hl.Position = UDim2.fromOffset(WS.hlX, BAR_H / 2)
+	hl.BackgroundTransparency = 1 - 0.95 * WS.hlA
+	hlStroke.Transparency = 1 - 0.55 * WS.hlA
 end)
 
-local HOLD_TIME, MOVE_THRESHOLD = 0.32, 10
-local pressing, dragMode, pressStart, baseX, baseY, holdToken = false, false, Vector2.new(), 0, 0, 0
-
-local function clampFab(x, y)
-	local vs = gui.AbsoluteSize
-	return math.clamp(x, 32, vs.X - 32), math.clamp(y, 32, vs.Y - 32)
-end
-
-local function snapFab()
-	local vs = gui.AbsoluteSize
-	local c = fabHolder.Position
-	local x = (c.X.Offset < vs.X / 2) and 36 or (vs.X - 36)
-	tween(fabHolder, 0.3, { Position = UDim2.fromOffset(x, c.Y.Offset) }, Enum.EasingStyle.Back)
-end
+local HOLD_TIME = 0.32
+local pressing, holdToken = false, 0
 
 local function endPress()
 	if not pressing then return end
@@ -3741,8 +4031,6 @@ local function endPress()
 		local it = WS.sel
 		closeWheel(it)
 		if it then wheelAction(it) end
-	elseif dragMode then
-		snapFab()
 	else
 		setVisible(hidden)
 	end
@@ -3754,15 +4042,16 @@ bind(fab.MouseLeave, function() if not pressing then tween(fabScale, 0.15, { Sca
 bind(fab.InputBegan, function(input)
 	if input.UserInputType ~= Enum.UserInputType.MouseButton1 and input.UserInputType ~= Enum.UserInputType.Touch then return end
 	if pressing then return end
-	pressing, dragMode = true, false
+	pressing = true
 	pressStart = Vector2.new(input.Position.X, input.Position.Y)
-	baseX, baseY = fabHolder.Position.X.Offset, fabHolder.Position.Y.Offset
 	holdToken = holdToken + 1
 	local token = holdToken
 	tween(fabScale, 0.15, { Scale = 0.94 })
 	tween(fabRingStroke, HOLD_TIME, { Thickness = 3.5, Transparency = 0 })
 	task.delay(HOLD_TIME, function()
-		if alive and pressing and token == holdToken and not dragMode and not WS.open then openWheel() end
+		if alive and pressing and token == holdToken and not WS.open then
+			openWheel()
+		end
 	end)
 	local c
 	c = input.Changed:Connect(function()
@@ -3773,25 +4062,10 @@ bind(fab.InputBegan, function(input)
 	end)
 end)
 bind(UIS.InputChanged, function(input)
-	if not pressing then return end
+	if not pressing or not WS.open then return end
 	if input.UserInputType ~= Enum.UserInputType.MouseMovement and input.UserInputType ~= Enum.UserInputType.Touch then return end
 	local delta = Vector2.new(input.Position.X, input.Position.Y) - pressStart
-	if WS.open then
-		setWheelSel(pickWheel(delta))
-		local m = delta.Magnitude
-		local f = m > 0 and math.min(m, 70) / m or 0
-		WS.parTX, WS.parTY = delta.X * f, delta.Y * f
-	else
-		if not dragMode and delta.Magnitude > MOVE_THRESHOLD then
-			dragMode = true
-			holdToken = holdToken + 1
-			tween(fabRingStroke, 0.15, { Thickness = 1.5, Transparency = 0.5 })
-		end
-		if dragMode then
-			local x, y = clampFab(baseX + delta.X, baseY + delta.Y)
-			fabHolder.Position = UDim2.fromOffset(x, y)
-		end
-	end
+	setBarSel(pickBar(input.Position.X, delta))
 end)
 
 end)
@@ -3852,19 +4126,6 @@ bind(RS.RenderStepped, function(dt)
 		else
 			spinners[img] = nil
 		end
-	end
-end)
-
-task.spawn(function()
-	while alive do
-		task.wait(math.random(25, 50) / 10)
-		if not alive then break end
-		for _ = 1, SETTINGS.Glitch and 4 or 0 do
-			ghostA.Position = UDim2.fromOffset(math.random(-3, 0), math.random(-1, 1))
-			ghostB.Position = UDim2.fromOffset(math.random(0, 3), math.random(-1, 1))
-			task.wait(0.04)
-		end
-		ghostA.Position, ghostB.Position = UDim2.new(), UDim2.new()
 	end
 end)
 

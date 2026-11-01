@@ -11,13 +11,16 @@ local CONFIG = {
 
 	-- Quick access scripts on the Home page: { name, desc, icon, url }
 	QuickScripts = {
-		{ name = "Infinite Yield", desc = "Admin commands", icon = "terminal", url = "https://raw.githubusercontent.com/EdgeIY/infiniteyield/master/source" },
+		{ name = "Infinite Yield", desc = "Admin commands", icon = "terminal", url = "https://raw.githubusercontent.com/EdgeIY/infiniteyield/master/source", fallbacks = { "https://cdn.jsdelivr.net/gh/EdgeIY/infiniteyield@master/source" } },
 	},
 	ToggleKey = Enum.KeyCode.RightShift,
+	ScriptsFolder = "workspace/scripts",
+	-- Folders that are created and watched: any .lua/.luau/.txt dropped in here shows up under "Saved scripts"
+	ScriptFolders = { "workspace/scripts", "scripts", "workspace" },  -- where "copy" saves a script file if the clipboard is unavailable
 	NotifyPosition = "TopRight",
 
 	Key = {
-		Enabled     = true,
+		Enabled     = false,
 		GetKeyLink  = "https://direct-link.net/10467882/1BXMAi69pzfM",
 
 		RemoteUrl   = "",
@@ -43,7 +46,8 @@ local CHANGELOG = {
 			{ "new", "Top tab bar: hold the toggle button and slide to a tab" },
 			{ "improved", "Notifications: accent strip, pulse ring, springy slide-in and error shake" },
 			{ "improved", "Key system shows expiry, remembers lockouts and handles server errors" },
-			{ "new", "Signed keys from the Discord bot (SF- lifetime, ST- timed) work offline" },
+			{ "new", "Signed keys from the Discord bot (SF- lifetime, ST- timed) work offline, with live key detection" },
+			{ "improved", "Expiry warnings (1 day, 1 hour, 5 minutes) and the UI closes when a timed key runs out" },
 			{ "removed", "Title glitch effect" },
 		},
 	},
@@ -79,12 +83,19 @@ local env = (getgenv and getgenv()) or _G
 if env.ShadowLauncherUnload then pcall(env.ShadowLauncherUnload) end
 
 local function getParent()
-	if gethui then
-		local ok, h = pcall(gethui)
-		if ok and h then return h end
-	end
-	local ok, cg = pcall(function() return game:GetService("CoreGui") end)
+	-- CoreGui first (drawn above Roblox's own UI), then gethui, then PlayerGui
+	local ok, cg = pcall(function()
+		local c = game:GetService("CoreGui")
+		local probe = Instance.new("Folder")
+		probe.Parent = c
+		probe:Destroy()
+		return c
+	end)
 	if ok and cg then return cg end
+	if gethui then
+		local ok2, h = pcall(gethui)
+		if ok2 and h then return h end
+	end
 	return Players.LocalPlayer:WaitForChild("PlayerGui")
 end
 
@@ -788,23 +799,79 @@ local function copyText(t)
 	return (pcall(f, t))
 end
 
+local function ensureFolder(path)
+	if not (makefolder and isfolder) then return end
+	local cur = ""
+	for part in path:gmatch("[^/\\]+") do
+		cur = cur == "" and part or (cur .. "/" .. part)
+		pcall(function() if not isfolder(cur) then makefolder(cur) end end)
+	end
+end
+local function saveScriptFile(name, text)
+	if type(writefile) ~= "function" then return nil end
+	local dir = CONFIG.ScriptsFolder or "workspace/scripts"
+	ensureFolder(dir)
+	local safe = tostring(name or "script"):gsub("[^%w%-_ ]", ""):gsub("%s+", "_")
+	if safe == "" then safe = "script" end
+	local path = dir .. "/" .. safe:sub(1, 40) .. ".lua"
+	if pcall(writefile, path, text) then return path end
+	return nil
+end
+-- copies to the clipboard; if that isn't possible, saves the script into ScriptsFolder
+local function doCopy(text, name, what)
+	what = what or "Script"
+	if type(text) ~= "string" or text == "" then
+		Notify({ Title = "Nothing to copy", Text = what .. " is empty.", Type = "warn", Duration = 2.5 })
+		return false
+	end
+	if copyText(text) then
+		Notify({ Title = "Copied", Text = what .. " copied to clipboard.", Type = "success", Duration = 2.5 })
+		return true
+	end
+	local path = saveScriptFile(name, text)
+	if path then
+		Notify({ Title = "Saved to file", Text = "No clipboard here, so it was saved to " .. path, Type = "success", Icon = "save", Duration = 5 })
+		return true
+	end
+	Notify({ Title = "Can't copy", Text = "No clipboard or file access in this executor.", Type = "warn" })
+	return false
+end
+
 local SB_API = "https://scriptblox.com/api/script"
 local SB_RAW = "https://scriptblox.com/raw/"
 
 local function runCode(src)
-	local fn, err = loadstring(src)
-	if not fn then return false, "Compile error: " .. tostring(err) end
-	local ok, e = pcall(fn)
-	if not ok then return false, tostring(e) end
+	local done, ok, e = false, false, nil
+	task.spawn(function()
+		ok, e = pcall(function()
+			local fn, cerr = loadstring(src)
+			if not fn then error("Compile error: " .. tostring(cerr), 0) end
+			fn()
+		end)
+		done = true
+	end)
+	local t0 = os.clock()
+	while not done and os.clock() - t0 < 1.5 do task.wait() end
+	if done and not ok then
+		warn("Execution Error: " .. tostring(e))
+		return false, tostring(e)
+	end
 	return true
 end
 
 local function fetchEntrySource(entry)
-	local url = entry.url or (entry.slug and (SB_RAW .. entry.slug))
-	if not url then return nil, "No url or slug set" end
-	local src, err = httpGet(url)
-	if not src then return nil, "Download failed: " .. tostring(err) end
-	return src
+	local urls = {}
+	local main = entry.url or (entry.slug and (SB_RAW .. entry.slug))
+	if main then urls[1] = main end
+	for _, u in ipairs(entry.fallbacks or {}) do urls[#urls + 1] = u end
+	if #urls == 0 then return nil, "No url or slug set" end
+	local lastErr
+	for _, u in ipairs(urls) do
+		local src, err = httpGet(u)
+		if src then return src end
+		lastErr = err
+	end
+	return nil, "Download failed: " .. tostring(lastErr)
 end
 
 local cam = workspace.CurrentCamera
@@ -1203,12 +1270,7 @@ local function Card(parent, o)
 	if o.Copy then
 		local cp = IconBtn(card, "copy", 16, { Size = UDim2.fromOffset(32, 32), AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -96, 0.5, 0), BackgroundColor3 = C.bg })
 		bind(cp.MouseButton1Click, function()
-			local text = o.Copy()
-			if text and copyText(text) then
-				Notify({ Title = "Copied", Text = "Loadstring copied to clipboard", Type = "success", Duration = 2.5 })
-			else
-				Notify({ Title = "Can't copy", Text = "Your executor has no clipboard function", Type = "warn" })
-			end
+			doCopy(o.Copy(), o.Title, "Loadstring")
 		end)
 	end
 
@@ -1221,7 +1283,8 @@ local function Card(parent, o)
 		sub.Text = "Fetching script..."
 		sub.TextColor3 = C.sub
 
-		local ok, err = o.Run()
+		local okc, ok, err = pcall(o.Run)
+		if not okc then ok, err = false, ok end
 		unspin(run.Icon)
 		if not alive then return end
 		task.wait(0.2)
@@ -1414,7 +1477,7 @@ safeBuild("Home", function()
 	local function grid(cellH, cols)
 		local g = frame({ Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1, LayoutOrder = nextOrder() }, list)
 		make("UIGridLayout", {
-			CellSize = cols == 1 and UDim2.new(1, 0, 0, cellH) or UDim2.new(0.5, -5, 0, cellH), CellPadding = UDim2.fromOffset(10, 10),
+			CellSize = UDim2.new(1 / cols, -math.ceil(10 * (cols - 1) / cols), 0, cellH), CellPadding = UDim2.fromOffset(10, 10),
 			SortOrder = Enum.SortOrder.LayoutOrder, FillDirectionMaxCells = cols,
 		}, g)
 		return g
@@ -1461,6 +1524,9 @@ safeBuild("Home", function()
 	stroke(prof, C.stroke, 1, 0.4)
 	gradient(prof, P(52, 30, 40), P(24, 18, 26), 20)
 	local _, pImg = avatar(prof, 68, UDim2.fromOffset(16, 16), lp.Name:sub(1, 1):upper())
+	local onDot = frame({ AnchorPoint = Vector2.new(1, 1), Position = UDim2.fromOffset(16 + 68 - 1, 16 + 68 - 1), Size = UDim2.fromOffset(14, 14), BackgroundColor3 = C.green, ZIndex = 4 }, prof)
+	round(onDot, 7)
+	stroke(onDot, C.bg2, 2, 0)
 	task.spawn(function()
 		local ok, url = pcall(function()
 			return Players:GetUserThumbnailAsync(lp.UserId, Enum.ThumbnailType.HeadShot, Enum.ThumbnailSize.Size150x150)
@@ -1470,7 +1536,9 @@ safeBuild("Home", function()
 			tween(pImg, 0.3, { ImageTransparency = 0 })
 		end
 	end)
-	label({ Text = "WELCOME BACK", Font = Enum.Font.GothamBold, TextSize = 10, TextColor3 = C.redHi, Position = UDim2.fromOffset(96, 14), Size = UDim2.new(1, -170, 0, 12) }, prof)
+	local hourNow = tonumber(os.date("%H")) or 12
+	local greeting = hourNow < 5 and "GOOD NIGHT" or hourNow < 12 and "GOOD MORNING" or hourNow < 18 and "GOOD AFTERNOON" or "GOOD EVENING"
+	label({ Text = greeting, Font = Enum.Font.GothamBold, TextSize = 10, TextColor3 = C.redHi, Position = UDim2.fromOffset(96, 14), Size = UDim2.new(1, -170, 0, 12) }, prof)
 	label({ Text = lp.DisplayName, Font = Enum.Font.GothamBold, TextSize = 18, TextTruncate = Enum.TextTruncate.AtEnd, Position = UDim2.fromOffset(96, 27), Size = UDim2.new(1, -170, 0, 22) }, prof)
 	label({ Text = "@" .. lp.Name, TextSize = 12, TextColor3 = C.sub, TextTruncate = Enum.TextTruncate.AtEnd, Position = UDim2.fromOffset(96, 50), Size = UDim2.new(1, -170, 0, 16) }, prof)
 	local vpill = frame({ AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -14, 0, 14), Size = UDim2.fromOffset(54, 20), BackgroundColor3 = C.red, BackgroundTransparency = 0.8 }, prof)
@@ -1489,6 +1557,7 @@ safeBuild("Home", function()
 	local keyState = { known = false, exp = nil }
 	STATE.keyInfo = function(exp)
 		keyState.known, keyState.exp = true, exp
+		STATE.keyExpiry = exp
 		if keyChip.Parent then
 			local text = "Lifetime key"
 			if exp then
@@ -1499,21 +1568,14 @@ safeBuild("Home", function()
 			keyChip.Parent.Visible = true
 		end
 	end
-	local playersLbl = chip(chips, #Players:GetPlayers() .. " players", 2)
-	task.spawn(function()
-		while alive and playersLbl.Parent do
-			task.wait(8)
-			if playersLbl.Parent then playersLbl.Text = #Players:GetPlayers() .. " players" end
-		end
-	end)
 
-	-- key status: green countdown ring + restore button
+	-- key status: countdown ring + restore button
 	if CONFIG.Key.Enabled then
-		local S, T = 64, 5
-		local kc = frame({ Size = UDim2.new(1, 0, 0, 88), BackgroundColor3 = C.card, LayoutOrder = nextOrder() }, list)
+		local S, T = 68, 5
+		local kc = frame({ Size = UDim2.new(1, 0, 0, 92), BackgroundColor3 = C.card, LayoutOrder = nextOrder() }, list)
 		round(kc, 14)
 		stroke(kc, C.stroke, 1, 0.4)
-		local ringBox = frame({ Position = UDim2.fromOffset(14, 12), Size = UDim2.fromOffset(S, S), BackgroundTransparency = 1 }, kc)
+		local ringBox = frame({ Position = UDim2.fromOffset(18, 12), Size = UDim2.fromOffset(S, S), BackgroundTransparency = 1 }, kc)
 		local glow = make("ImageLabel", {
 			AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.fromOffset(S + 24, S + 24),
 			BackgroundTransparency = 1, BorderSizePixel = 0, Image = "rbxassetid://5554236805", ImageColor3 = C.green, ImageTransparency = 0.75,
@@ -1539,6 +1601,19 @@ safeBuild("Home", function()
 		end
 		local rSt, rG = half(S / 2, T - S / 2)
 		local lSt, lG = half(0, T)
+
+		-- tick marks around the ring light up as the key fills
+		local NTK = 28
+		local ticks = {}
+		for i = 1, NTK do
+			local tk = frame({ AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.fromOffset(2, 5), BackgroundColor3 = C.green, BackgroundTransparency = 0.85 }, ringBox)
+			round(tk, 1)
+			local ang = math.rad((i - 1) / NTK * 360 - 90)
+			tk.Position = UDim2.fromOffset(S / 2 + math.cos(ang) * (S / 2 + 6), S / 2 + math.sin(ang) * (S / 2 + 6))
+			tk.Rotation = math.deg(ang) + 90
+			ticks[i] = tk
+		end
+
 		local headGlow = make("ImageLabel", {
 			AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.fromOffset(22, 22), BackgroundTransparency = 1, BorderSizePixel = 0,
 			Image = "rbxassetid://5554236805", ImageColor3 = C.green, ImageTransparency = 0.5,
@@ -1546,48 +1621,57 @@ safeBuild("Home", function()
 		}, ringBox)
 		local headDot = frame({ AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.fromOffset(8, 8), BackgroundColor3 = C.white, ZIndex = 4, Visible = false }, ringBox)
 		round(headDot, 4)
-		local ctr = label({ Text = "--", Font = Enum.Font.GothamBold, TextSize = 10, TextColor3 = C.green, TextXAlignment = Enum.TextXAlignment.Center, Size = UDim2.fromScale(1, 1), ZIndex = 5 }, ringBox)
+		local ctr = label({ Text = "--", Font = Enum.Font.GothamBold, TextSize = 15, TextScaled = true, TextColor3 = C.green, TextXAlignment = Enum.TextXAlignment.Center, AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(0.5, 0, 0.5, -6), Size = UDim2.new(1, -16, 0, 18), ZIndex = 5 }, ringBox)
+		make("UITextSizeConstraint", { MaxTextSize = 16, MinTextSize = 8 }, ctr)
+		local ctr2 = label({ Text = "", Font = Enum.Font.GothamMedium, TextSize = 8, TextColor3 = C.sub, TextXAlignment = Enum.TextXAlignment.Center, AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(0.5, 0, 0.5, 9), Size = UDim2.new(1, -12, 0, 10), ZIndex = 5 }, ringBox)
 
-		label({ Text = "Access key", Font = Enum.Font.GothamBold, TextSize = 14, Position = UDim2.fromOffset(92, 10), Size = UDim2.new(1, -106, 0, 18) }, kc)
-		local statusLbl = label({ Text = "Not verified yet", TextSize = 11, TextColor3 = C.sub, TextTruncate = Enum.TextTruncate.AtEnd, Position = UDim2.fromOffset(92, 29), Size = UDim2.new(1, -106, 0, 14) }, kc)
+		label({ Text = "Access key", Font = Enum.Font.GothamBold, TextSize = 14, Position = UDim2.fromOffset(104, 12), Size = UDim2.new(1, -214, 0, 18) }, kc)
+		local statusLbl = label({ Text = "Not verified yet", TextSize = 11, TextColor3 = C.sub, TextTruncate = Enum.TextTruncate.AtEnd, Position = UDim2.fromOffset(104, 31), Size = UDim2.new(1, -118, 0, 14) }, kc)
+		local badge = frame({ AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -14, 0, 12), Size = UDim2.fromOffset(0, 18), AutomaticSize = Enum.AutomaticSize.X, BackgroundColor3 = C.green, BackgroundTransparency = 0.82 }, kc)
+		round(badge, 9)
+		make("UIPadding", { PaddingLeft = UDim.new(0, 8), PaddingRight = UDim.new(0, 8) }, badge)
+		local badgeLbl = label({ Text = "WAITING", Font = Enum.Font.GothamBold, TextSize = 9, TextColor3 = C.green, TextXAlignment = Enum.TextXAlignment.Center, AutomaticSize = Enum.AutomaticSize.X, Size = UDim2.new(0, 0, 1, 0) }, badge)
 
 		local function compute()
-			local col, txt, p, status = C.green, "--", 0, "Not verified yet"
+			local col, big, cap, p, status, tag = C.green, "--", "", 0, "Not verified yet", "WAITING"
 			if keyState.known then
 				if keyState.exp then
 					local rem = keyState.exp - os.time()
 					if rem <= 0 then
-						col, txt, p, status = C.red, "Expired", 0, "This key has expired"
+						col, big, cap, p, status, tag = C.red, "Expired", "", 0, "This key has expired", "EXPIRED"
 					else
 						p = math.clamp(rem / (30 * 86400), 0.04, 1)
 						local d = math.floor(rem / 86400)
 						if d >= 1 then
-							txt = d .. "d " .. math.floor((rem % 86400) / 3600) .. "h"
+							big, cap = tostring(d), d == 1 and "day left" or "days left"
 						else
-							txt = string.format("%02d:%02d:%02d", math.floor(rem / 3600), math.floor((rem % 3600) / 60), rem % 60)
+							big = string.format("%02d:%02d:%02d", math.floor(rem / 3600), math.floor((rem % 3600) / 60), rem % 60)
+							cap = "left"
 						end
-						if rem < 3600 then col = C.red elseif rem < 86400 then col = C.amber end
+						tag = "ACTIVE"
+						if rem < 3600 then col, tag = C.red, "EXPIRING" elseif rem < 86400 then col, tag = C.amber, "EXPIRING" end
 						status = "Expires " .. os.date("%b %d, %Y", keyState.exp)
 					end
 				else
-					txt, p, status = "Lifetime", 1, "Never expires"
+					big, cap, p, status, tag = "Lifetime", "no expiry", 1, "Never expires", "LIFETIME"
 				end
 			end
-			return col, txt, p, status
+			return col, big, cap, p, status, tag
 		end
 
 		local shown, colNow = 0, C.green
 		bind(RS.RenderStepped, function(dt)
 			if not alive or not kc.Parent then return end
 			if not p.Visible then shown = 0 return end
-			local col, txt, target, status = compute()
+			local col, big, cap, target, status, tag = compute()
 			shown = shown + (target - shown) * math.min(1, dt * 2.5)
 			colNow = colNow:Lerp(col, math.min(1, dt * 6))
 			local now = os.clock()
 			rG.Rotation = math.clamp(shown * 360, 0, 180)
 			lG.Rotation = math.clamp(shown * 360, 180, 360)
 			rSt.Color, lSt.Color, trackStroke.Color, ctr.TextColor3 = colNow, colNow, colNow, colNow
-			ctr.Text, statusLbl.Text = txt, status
+			ctr.Text, ctr2.Text, statusLbl.Text = big, cap, status
+			badgeLbl.Text, badgeLbl.TextColor3, badge.BackgroundColor3 = tag, colNow, colNow
 			local urgent = (col == C.red or col == C.amber)
 			local pulse = math.sin(now * (urgent and 5 or 2.2))
 			glow.ImageColor3 = colNow
@@ -1597,6 +1681,11 @@ safeBuild("Home", function()
 			disc.BackgroundColor3 = colNow
 			disc.BackgroundTransparency = 0.88 + 0.04 * pulse
 			trackStroke.Transparency = 0.85 + 0.05 * math.sin(now * 1.3)
+			for i, tk in ipairs(ticks) do
+				local lit = ((i - 1) / NTK) < shown
+				tk.BackgroundColor3 = colNow
+				tk.BackgroundTransparency = lit and (0.12 + 0.12 * math.sin(now * 3 + i * 0.5)) or 0.86
+			end
 			local showHead = shown > 0.02 and shown < 0.995
 			headDot.Visible, headGlow.Visible = showHead, showHead
 			if showHead then
@@ -1609,7 +1698,7 @@ safeBuild("Home", function()
 			end
 		end)
 
-		local rb = Btn(kc, { Text = "Restore key", Icon = "refresh-cw", Size = UDim2.fromOffset(132, 26), Position = UDim2.fromOffset(92, 52), Radius = 8, TextSize = 12, IconSize = 13 })
+		local rb = Btn(kc, { Text = "Restore key", Icon = "refresh-cw", Size = UDim2.fromOffset(132, 26), Position = UDim2.fromOffset(104, 56), Radius = 8, TextSize = 12, IconSize = 13 })
 		local rbusy = false
 		bind(rb.Button.MouseButton1Click, function()
 			if rbusy then return end
@@ -1634,6 +1723,32 @@ safeBuild("Home", function()
 			end
 			setBtn(rb, "Restore key", "refresh-cw")
 			rbusy = false
+		end)
+	end
+
+	-- quick stats
+	do
+		local sg = grid(54, 2)
+		local function stat(order, captionText)
+			local t = frame({ BackgroundColor3 = C.card, LayoutOrder = order }, sg)
+			round(t, 12)
+			stroke(t, C.stroke, 1, 0.4)
+			local v = label({ Text = "0", Font = Enum.Font.GothamBold, TextSize = 16, TextXAlignment = Enum.TextXAlignment.Center, Position = UDim2.fromOffset(4, 9), Size = UDim2.new(1, -8, 0, 20) }, t)
+			label({ Text = captionText, TextSize = 10, TextColor3 = C.sub, TextXAlignment = Enum.TextXAlignment.Center, Position = UDim2.fromOffset(4, 31), Size = UDim2.new(1, -8, 0, 14) }, t)
+			return v
+		end
+		local timeV = stat(1, "Session")
+		local playersV = stat(2, "In server")
+		local t0 = os.time()
+		task.spawn(function()
+			while alive and timeV.Parent do
+				if p.Visible then
+					local el = os.time() - t0
+					timeV.Text = el >= 3600 and string.format("%dh %02dm", math.floor(el / 3600), math.floor((el % 3600) / 60)) or string.format("%02d:%02d", math.floor(el / 60), el % 60)
+					playersV.Text = #Players:GetPlayers() .. "/" .. Players.MaxPlayers
+				end
+				task.wait(1)
+			end
 		end)
 	end
 
@@ -1680,6 +1795,7 @@ safeBuild("Home", function()
 			local tile = make("TextButton", { BackgroundColor3 = C.card, Text = "", AutoButtonColor = false, BorderSizePixel = 0, LayoutOrder = i }, qg)
 			round(tile, 12)
 			local st = stroke(tile, C.stroke, 1, 0.4)
+			local tsc = make("UIScale", {}, tile)
 			local ibox = frame({ Size = UDim2.fromOffset(38, 38), Position = UDim2.fromOffset(12, 13), BackgroundColor3 = C.bg }, tile)
 			round(ibox, 10)
 			local ic = Icon(ibox, q.icon or "zap", 18, C.red)
@@ -1687,16 +1803,20 @@ safeBuild("Home", function()
 			ic.Position = UDim2.fromScale(0.5, 0.5)
 			label({ Text = q.name, Font = Enum.Font.GothamBold, TextSize = 13, TextTruncate = Enum.TextTruncate.AtEnd, Position = UDim2.fromOffset(60, 13), Size = UDim2.new(1, -68, 0, 18) }, tile)
 			local sub = label({ Text = q.desc or "Tap to run", TextSize = 11, TextColor3 = C.sub, TextTruncate = Enum.TextTruncate.AtEnd, Position = UDim2.fromOffset(60, 33), Size = UDim2.new(1, -68, 0, 16) }, tile)
-			bind(tile.MouseEnter, function() tween(st, 0.15, { Color = C.red, Transparency = 0.1 }) end)
-			bind(tile.MouseLeave, function() tween(st, 0.15, { Color = C.stroke, Transparency = 0.4 }) end)
+			bind(tile.MouseEnter, function() tween(st, 0.15, { Color = C.red, Transparency = 0.1 }) tween(tsc, 0.15, { Scale = 1.03 }) end)
+			bind(tile.MouseLeave, function() tween(st, 0.15, { Color = C.stroke, Transparency = 0.4 }) tween(tsc, 0.15, { Scale = 1 }) end)
 			local busy = false
 			bind(tile.MouseButton1Click, function()
 				if busy then return end
 				busy = true
 				sub.Text, sub.TextColor3 = "Running...", C.sub
-				local src, err = fetchEntrySource(q)
-				local ok = false
-				if src then ok, err = runCode(src) end
+				local okp, ok, err = pcall(function()
+					local src, ferr = fetchEntrySource(q)
+					if not src then return false, ferr end
+					return runCode(src)
+				end)
+				if not okp then ok, err = false, ok end
+				busy = false
 				if not alive then return end
 				if ok then
 					sub.Text, sub.TextColor3 = "Executed", C.green
@@ -1709,7 +1829,6 @@ safeBuild("Home", function()
 				task.delay(2.5, function()
 					if alive and tile.Parent then sub.Text, sub.TextColor3 = q.desc or "Tap to run", C.sub end
 				end)
-				busy = false
 			end)
 		end
 	end
@@ -1743,16 +1862,19 @@ safeBuild("Editor", function()
 	local PAD, GAP = 10, 8
 	local SIDE_PW = math.clamp(math.floor(WIN_W * 0.3), 170, 260)
 	local sideOpen = WIN_W >= 440
-	local FONT, FSIZE = Enum.Font.Code, 13
+	local FONT, FSIZE = Enum.Font.RobotoMono, 13
 
 	local function set(list)
 		local t = {}
 		for _, w in ipairs(list) do t[w] = true end
 		return t
 	end
-	local KEYWORDS = set({ "and", "break", "do", "else", "elseif", "end", "false", "for", "function", "goto", "if", "in", "local", "nil", "not", "or", "repeat", "return", "then", "true", "until", "while", "continue" })
-	local BUILTINS = set({ "game", "workspace", "script", "print", "warn", "error", "pcall", "xpcall", "pairs", "ipairs", "next", "tostring", "tonumber", "type", "typeof", "select", "unpack", "require", "loadstring", "task", "math", "string", "table", "os", "Instance", "Vector3", "Vector2", "CFrame", "Color3", "UDim2", "Enum", "wait", "spawn", "delay", "setmetatable", "getmetatable", "rawget", "rawset", "assert", "tick", "time", "coroutine", "getgenv", "shared", "_G" })
-	local COL = { kw = "#c792ea", str = "#a5e075", num = "#f0b86e", com = "#6e6a86", bi = "#6cb6ff" }
+	local CONTROL = set({ "if", "then", "else", "elseif", "end", "for", "while", "do", "repeat", "until", "return", "break", "continue", "goto", "in" })
+	local KW_BLUE = set({ "local", "function", "and", "or", "not", "nil", "true", "false" })
+	local CLASSES = set({ "task", "math", "string", "table", "os", "coroutine", "utf8", "debug", "bit32", "Instance", "Vector3", "Vector2", "CFrame", "Color3", "UDim", "UDim2", "Enum", "Rect", "Ray", "TweenInfo", "NumberRange", "NumberSequence", "ColorSequence", "BrickColor", "Random", "Region3" })
+	local GLOBALS = set({ "game", "workspace", "script", "shared", "_G", "_VERSION", "getgenv", "getrenv" })
+	-- VS Code "Dark+" colours
+	local COL = { ctl = "#C586C0", kw = "#569CD6", fn = "#DCDCAA", cls = "#4EC9B0", glob = "#4FC1FF", var = "#9CDCFE", str = "#CE9178", num = "#B5CEA8", com = "#6A9955" }
 
 	local function esc2(str)
 		str = str:gsub("&", "&amp;"):gsub("<", "&lt;"):gsub(">", "&gt;"):gsub('"', "&quot;"):gsub("'", "&apos;")
@@ -1762,6 +1884,7 @@ safeBuild("Editor", function()
 	local function highlight(src)
 		local out, buf = {}, {}
 		local i, n = 1, #src
+		local prevWord = ""
 		local function flush()
 			if #buf > 0 then
 				out[#out + 1] = esc2(table.concat(buf))
@@ -1809,9 +1932,17 @@ safeBuild("Editor", function()
 				i = i + #num
 			elseif c:match("[%a_]") then
 				local word = src:match("^[%w_]+", i)
-				if KEYWORDS[word] then push(word, COL.kw)
-				elseif BUILTINS[word] then push(word, COL.bi)
-				else buf[#buf + 1] = word end
+				local nextCh = src:match("^[ \t]*(.)", i + #word)
+				local color
+				if CONTROL[word] then color = COL.ctl
+				elseif KW_BLUE[word] then color = COL.kw
+				elseif prevWord == "function" then color = COL.fn
+				elseif CLASSES[word] then color = COL.cls
+				elseif GLOBALS[word] then color = COL.glob
+				elseif nextCh == "(" then color = COL.fn
+				else color = COL.var end
+				push(word, color)
+				prevWord = word
 				i = i + #word
 			else
 				buf[#buf + 1] = c
@@ -1824,6 +1955,7 @@ safeBuild("Editor", function()
 
 	local EDIT = { tabs = {}, active = 1 }
 	local SAVED = {}
+	local FILES = {}
 	do
 		local raw = fileRead("editor.json")
 		if raw and raw ~= "" then
@@ -1929,9 +2061,12 @@ safeBuild("Editor", function()
 		BackgroundColor3 = C.bg, ClipsDescendants = true,
 	}, p)
 
+	local editorBg = frame({ Size = UDim2.fromScale(1, 1), BackgroundColor3 = Color3.fromRGB(30, 30, 30), ZIndex = 0 }, codePanel)
+	NoTheme(editorBg)
+	round(editorBg, 18)
 	local gutterClip = frame({ Position = UDim2.fromOffset(6, 8), Size = UDim2.new(0, 34, 1, -16), BackgroundTransparency = 1, ClipsDescendants = true }, codePanel)
 	local gutter = label({
-		Text = "1", Font = FONT, TextSize = FSIZE, TextColor3 = P(110, 95, 104), TextXAlignment = Enum.TextXAlignment.Right,
+		Text = "1", RichText = true, Font = FONT, TextSize = FSIZE, TextColor3 = Color3.fromRGB(133, 133, 133), TextXAlignment = Enum.TextXAlignment.Right,
 		TextYAlignment = Enum.TextYAlignment.Top, Size = UDim2.new(1, -6, 0, 100),
 	}, gutterClip)
 
@@ -1941,17 +2076,21 @@ safeBuild("Editor", function()
 		ScrollingDirection = Enum.ScrollingDirection.XY,
 	}, codePanel)
 
+	local curLine = frame({ BackgroundColor3 = Color3.new(1, 1, 1), BackgroundTransparency = 0.95, Size = UDim2.fromOffset(200, 16), Visible = false, ZIndex = 0 }, scroller)
 	local hl = label({
-		Text = "", RichText = true, Font = FONT, TextSize = FSIZE, TextColor3 = C.text, TextXAlignment = Enum.TextXAlignment.Left,
+		Text = "", RichText = true, Font = FONT, TextSize = FSIZE, TextColor3 = Color3.fromRGB(212, 212, 212), TextXAlignment = Enum.TextXAlignment.Left,
 		TextYAlignment = Enum.TextYAlignment.Top, TextWrapped = false, Size = UDim2.fromOffset(200, 100),
 	}, scroller)
 	local box = make("TextBox", {
-		Text = "", Font = FONT, TextSize = FSIZE, TextColor3 = C.text, TextTransparency = 1, BackgroundTransparency = 1,
+		Text = "", Font = FONT, TextSize = FSIZE, TextColor3 = Color3.fromRGB(212, 212, 212), TextTransparency = 1, BackgroundTransparency = 1,
 		TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top, TextWrapped = false,
 		MultiLine = true, ClearTextOnFocus = false, PlaceholderText = "-- Write or paste a script here",
-		PlaceholderColor3 = P(110, 95, 104), Size = UDim2.fromOffset(200, 100), ZIndex = 2,
+		PlaceholderColor3 = Color3.fromRGB(110, 110, 110), Size = UDim2.fromOffset(200, 100), ZIndex = 2,
 	}, scroller)
 
+	local canvasW, curIdx = 200, 0
+	local updateCurLine
+	local lastText = ""
 	local function relayout()
 		local tb = box.TextBounds
 		local w = math.max(scroller.AbsoluteSize.X - 8, tb.X + 40)
@@ -1960,11 +2099,15 @@ safeBuild("Editor", function()
 		hl.Size = UDim2.fromOffset(w, h)
 		scroller.CanvasSize = UDim2.fromOffset(w, h + 64)
 		gutter.Size = UDim2.new(1, -6, 0, h)
+		canvasW = w
+		curLine.Size = UDim2.fromOffset(w, curLine.Size.Y.Offset)
 	end
 	local function updateGutter()
 		local _, n = box.Text:gsub("\n", "\n")
 		local lines = {}
-		for i = 1, n + 1 do lines[i] = tostring(i) end
+		for i = 1, n + 1 do
+			lines[i] = (i == curIdx) and ('<font color="#C6C6C6">' .. i .. "</font>") or tostring(i)
+		end
 		gutter.Text = table.concat(lines, "\n")
 	end
 	local function updateHL()
@@ -2001,6 +2144,316 @@ safeBuild("Editor", function()
 	bind(scroller:GetPropertyChangedSignal("AbsoluteSize"), relayout)
 	bind(box:GetPropertyChangedSignal("TextBounds"), relayout)
 	bind(box:GetPropertyChangedSignal("CursorPosition"), ensureCursor)
+
+	-- ===== Monaco-style autocomplete =====
+	local KIND = {
+		kw = { "K", "#569CD6" }, fn = { "f", "#DCDCAA" }, cls = { "C", "#4EC9B0" },
+		var = { "v", "#9CDCFE" }, mem = { "m", "#9CDCFE" },
+	}
+	local STATIC, STATIC_SET = {}, {}
+	do
+		local function add(list, kind)
+			for _, w in ipairs(list) do
+				STATIC[#STATIC + 1] = { text = w, kind = kind }
+				STATIC_SET[w] = true
+			end
+		end
+		add({ "and", "break", "do", "else", "elseif", "end", "false", "for", "function", "goto", "if", "in", "local", "nil", "not", "or", "repeat", "return", "then", "true", "until", "while", "continue" }, "kw")
+		add({ "print", "warn", "error", "pcall", "xpcall", "pairs", "ipairs", "next", "tostring", "tonumber", "type", "typeof", "select", "unpack", "require", "loadstring", "assert", "setmetatable", "getmetatable", "rawget", "rawset", "rawequal", "tick", "time", "wait", "spawn", "delay", "getgenv", "getrenv", "getfenv", "setfenv", "identifyexecutor", "setclipboard", "writefile", "readfile", "appendfile", "isfile", "isfolder", "listfiles", "makefolder", "delfile", "hookfunction", "hookmetamethod", "request", "http_request", "queue_on_teleport", "firesignal", "fireclickdetector", "fireproximityprompt", "firetouchinterest", "getconnections", "gethui", "cloneref", "newcclosure", "checkcaller", "getrawmetatable", "setreadonly", "getnamecallmethod" }, "fn")
+		add({ "game", "workspace", "script", "shared", "_G", "task", "math", "string", "table", "os", "coroutine", "utf8", "debug", "bit32", "Instance", "Vector3", "Vector2", "CFrame", "Color3", "UDim", "UDim2", "Enum", "Rect", "Ray", "TweenInfo", "NumberRange", "NumberSequence", "ColorSequence", "BrickColor", "Random", "Region3" }, "cls")
+	end
+	local MEMBERS = {
+		math = { "abs", "acos", "asin", "atan", "atan2", "ceil", "clamp", "cos", "deg", "exp", "floor", "fmod", "huge", "log", "max", "min", "modf", "noise", "pi", "pow", "rad", "random", "randomseed", "round", "sign", "sin", "sqrt", "tan" },
+		string = { "byte", "char", "find", "format", "gmatch", "gsub", "len", "lower", "match", "pack", "rep", "reverse", "split", "sub", "unpack", "upper" },
+		table = { "clear", "clone", "concat", "create", "find", "freeze", "insert", "isfrozen", "move", "pack", "remove", "sort", "unpack" },
+		task = { "cancel", "defer", "delay", "spawn", "wait" },
+		os = { "clock", "date", "difftime", "time" },
+		coroutine = { "close", "create", "isyieldable", "resume", "running", "status", "wrap", "yield" },
+		Instance = { "new" },
+		Vector3 = { "new", "zero", "one", "xAxis", "yAxis", "zAxis", "FromNormalId" },
+		Vector2 = { "new", "zero", "one" },
+		CFrame = { "new", "Angles", "lookAt", "fromEulerAnglesXYZ", "fromAxisAngle", "identity" },
+		Color3 = { "new", "fromRGB", "fromHSV", "fromHex" },
+		UDim2 = { "new", "fromScale", "fromOffset" },
+		UDim = { "new" },
+		Enum = { "ApplyStrokeMode", "AutomaticSize", "EasingDirection", "EasingStyle", "FillDirection", "Font", "HorizontalAlignment", "HumanoidStateType", "KeyCode", "Material", "NormalId", "PartType", "ScaleType", "SortOrder", "TextXAlignment", "TextYAlignment", "UserInputType", "VerticalAlignment", "ZIndexBehavior" },
+		game = { "CoreGui", "FindFirstChild", "FindFirstChildOfClass", "GameId", "GetChildren", "GetDescendants", "GetService", "HttpGet", "IsLoaded", "JobId", "Lighting", "Loaded", "PlaceId", "Players", "ReplicatedStorage", "RunService", "WaitForChild", "Workspace" },
+		workspace = { "CurrentCamera", "FindFirstChild", "GetChildren", "GetServerTimeNow", "Gravity", "Raycast", "Terrain" },
+		Players = { "GetPlayerFromCharacter", "GetPlayers", "LocalPlayer", "MaxPlayers", "PlayerAdded", "PlayerRemoving" },
+	}
+	local INSTANCE_MEMBERS = { "Anchored", "CFrame", "CanCollide", "Changed", "Character", "ChildAdded", "ChildRemoved", "ClassName", "Clone", "Color", "Connect", "Destroy", "Disconnect", "FindFirstAncestor", "FindFirstChild", "FindFirstChildOfClass", "Fire", "FireServer", "GetChildren", "GetDescendants", "GetPropertyChangedSignal", "Health", "Humanoid", "HumanoidRootPart", "InvokeServer", "IsA", "IsDescendantOf", "JumpHeight", "JumpPower", "LoadAnimation", "MaxHealth", "MoveTo", "Name", "Once", "Parent", "Play", "Position", "Size", "Stop", "TakeDamage", "Text", "Transparency", "Value", "Visible", "Wait", "WaitForChild", "WalkSpeed" }
+
+	local function scoreOf(word, text)
+		local lw, lt = word:lower(), text:lower()
+		if lt:sub(1, #lw) == lw then
+			return (text:sub(1, #word) == word and 0 or 1) + #text * 0.001
+		end
+		local pos = 1
+		for k = 1, #lw do
+			local f = lt:find(lw:sub(k, k), pos, true)
+			if not f then return nil end
+			pos = f + 1
+		end
+		return 5 + #text * 0.001
+	end
+	local function docWords(text, skipWord)
+		local seen, list = {}, {}
+		for w in text:gmatch("[%a_][%w_]*") do
+			if #w >= 3 and w ~= skipWord and not STATIC_SET[w] and not seen[w] then
+				seen[w] = true
+				list[#list + 1] = { text = w, kind = "var" }
+				if #list >= 300 then break end
+			end
+		end
+		return list
+	end
+	local function gather(word, text, memberObj)
+		local pool = {}
+		if memberObj ~= nil then
+			for _, w in ipairs(MEMBERS[memberObj] or INSTANCE_MEMBERS) do
+				pool[#pool + 1] = { text = w, kind = (w:match("^%l") and w ~= "pi" and w ~= "huge") and "fn" or "mem" }
+			end
+		else
+			for _, e in ipairs(STATIC) do pool[#pool + 1] = e end
+			for _, e in ipairs(docWords(text, word)) do pool[#pool + 1] = e end
+		end
+		local out = {}
+		for _, e in ipairs(pool) do
+			if e.text ~= word then
+				local sc = (word == "") and 0 or scoreOf(word, e.text)
+				if sc then out[#out + 1] = { text = e.text, kind = e.kind, score = sc } end
+			end
+		end
+		table.sort(out, function(a, b)
+			if a.score ~= b.score then return a.score < b.score end
+			return a.text < b.text
+		end)
+		return out
+	end
+
+	local ac = { open = false, items = {}, rows = {}, sel = 1, start = 0, cursor = 0, word = "", text = "", navUntil = 0 }
+	local acFrame = frame({ Size = UDim2.fromOffset(200, 28), BackgroundColor3 = Color3.fromRGB(37, 37, 38), Visible = false, ZIndex = 40 }, codePanel)
+	NoTheme(acFrame)
+	round(acFrame, 6)
+	stroke(acFrame, Color3.fromRGB(80, 80, 85), 1, 0)
+	make("UIPadding", { PaddingTop = UDim.new(0, 3), PaddingBottom = UDim.new(0, 3), PaddingLeft = UDim.new(0, 3), PaddingRight = UDim.new(0, 3) }, acFrame)
+	make("UIListLayout", { SortOrder = Enum.SortOrder.LayoutOrder }, acFrame)
+
+	local function hideAC()
+		ac.open = false
+		acFrame.Visible = false
+	end
+	local function paintSel()
+		for i, r in ipairs(ac.rows) do r.BackgroundTransparency = (i == ac.sel) and 0 or 1 end
+	end
+	local function acAccept(idx)
+		local it = ac.items[idx or ac.sel]
+		if not (ac.open and it) then return end
+		local t = ac.text
+		local nt = t:sub(1, ac.start - 1) .. it.text .. t:sub(ac.cursor)
+		local pos = ac.start + #it.text
+		hideAC()
+		lastText = nt
+		box.Text = nt
+		box:CaptureFocus()
+		task.delay(0.03, function() box.CursorPosition = pos end)
+	end
+	local function acRender()
+		for _, r in ipairs(ac.rows) do r:Destroy() end
+		ac.rows = {}
+		local maxLen = 0
+		for i, it in ipairs(ac.items) do
+			maxLen = math.max(maxLen, #it.text)
+			local k = KIND[it.kind] or KIND.var
+			local kc = Color3.fromHex(k[2])
+			local row = make("TextButton", { Size = UDim2.new(1, 0, 0, 22), BackgroundColor3 = Color3.fromRGB(4, 57, 94), BackgroundTransparency = (i == ac.sel) and 0 or 1, Text = "", AutoButtonColor = false, BorderSizePixel = 0, LayoutOrder = i }, acFrame)
+			round(row, 4)
+			local ib = frame({ Position = UDim2.fromOffset(4, 4), Size = UDim2.fromOffset(14, 14), BackgroundColor3 = kc, BackgroundTransparency = 0.8 }, row)
+			round(ib, 3)
+			label({ Text = k[1], Font = Enum.Font.GothamBold, TextSize = 10, TextColor3 = kc, TextXAlignment = Enum.TextXAlignment.Center, Size = UDim2.fromScale(1, 1) }, ib)
+			local pre = #ac.word
+			local shown
+			if pre > 0 and it.text:lower():sub(1, pre) == ac.word:lower() then
+				shown = '<b><font color="#18A3FF">' .. esc2(it.text:sub(1, pre)) .. "</font></b>" .. esc2(it.text:sub(pre + 1))
+			else
+				shown = esc2(it.text)
+			end
+			label({ Text = shown, RichText = true, Font = FONT, TextSize = 12, TextColor3 = Color3.fromRGB(204, 204, 204), Position = UDim2.fromOffset(24, 0), Size = UDim2.new(1, -28, 1, 0) }, row)
+			row.InputBegan:Connect(function(input)
+				if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then acAccept(i) end
+			end)
+			row.MouseEnter:Connect(function()
+				ac.sel = i
+				paintSel()
+			end)
+			ac.rows[i] = row
+		end
+		return math.clamp(maxLen * 7.6 + 48, 170, 300), #ac.items * 22 + 6
+	end
+	local function acPlace(w, h)
+		local sc = math.max(uiScale.Scale, 0.01)
+		local before = ac.text:sub(1, ac.start - 1)
+		local _, nl = before:gsub("\n", "\n")
+		local lineText = before:sub((before:match(".*\n()") or 1))
+		local lh = TextService:GetTextSize("Ag", FSIZE, FONT, Vector2.new(1e5, 1e5)).Y
+		local caretX = TextService:GetTextSize(lineText, FSIZE, FONT, Vector2.new(1e5, 1e5)).X
+		local ox = (scroller.AbsolutePosition.X - codePanel.AbsolutePosition.X) / sc
+		local oy = (scroller.AbsolutePosition.Y - codePanel.AbsolutePosition.Y) / sc
+		local x = ox + caretX - scroller.CanvasPosition.X
+		local y = oy + (nl + 1) * lh - scroller.CanvasPosition.Y + 3
+		local pw, ph = codePanel.AbsoluteSize.X / sc, codePanel.AbsoluteSize.Y / sc
+		x = math.clamp(x, 4, math.max(pw - w - 4, 4))
+		if y + h > ph - 64 then y = y - lh - h - 6 end
+		acFrame.Size = UDim2.fromOffset(w, h)
+		acFrame.Position = UDim2.fromOffset(x, math.max(y, 4))
+	end
+	local function acRefresh()
+		if os.clock() < ac.navUntil then return end
+		local cp = box.CursorPosition
+		if cp < 1 or not box:IsFocused() then hideAC() return end
+		local text = box.Text
+		if #text > 12000 then hideAC() return end
+		local before = text:sub(1, cp - 1)
+		local word = before:match("[%w_]*$")
+		local start = cp - #word
+		local lineText = before:sub((before:match(".*\n()") or 1))
+		if lineText:find("--", 1, true) then hideAC() return end
+		local stripped = lineText:gsub("\\.", "")
+		local _, nd = stripped:gsub('"', "")
+		local _, ns = stripped:gsub("'", "")
+		if nd % 2 == 1 or ns % 2 == 1 then hideAC() return end
+		if word:match("^%d") then hideAC() return end
+		local sep = start > 1 and text:sub(start - 1, start - 1) or ""
+		local memberObj
+		if sep == "." or sep == ":" then
+			if sep == "." and start > 2 and text:sub(start - 2, start - 2) == "." then hideAC() return end
+			memberObj = text:sub(1, start - 2):match("([%w_]+)$") or "?"
+		elseif #word < 1 then
+			hideAC()
+			return
+		end
+		local items = gather(word, text, memberObj)
+		while #items > 6 do items[#items] = nil end
+		if #items == 0 then hideAC() return end
+		ac.items, ac.word, ac.start, ac.cursor, ac.text, ac.sel = items, word, start, cp, text, 1
+		local w, h = acRender()
+		acPlace(w, h)
+		ac.open = true
+		acFrame.Visible = true
+	end
+
+	local PAIRS = { ["("] = ")", ["["] = "]", ["{"] = "}", ['"'] = '"', ["'"] = "'" }
+	local CLOSERS = { [")"] = true, ["]"] = true, ["}"] = true, ['"'] = true, ["'"] = true }
+	local function applyText(t, cursor)
+		lastText = t
+		box.Text = t
+		task.defer(function() box.CursorPosition = cursor end)
+	end
+	local function diffInsert(old, new)
+		if #new ~= #old + 1 then return nil end
+		local i, n = 1, #old
+		while i <= n and old:byte(i) == new:byte(i) do i = i + 1 end
+		if old:sub(i) == new:sub(i + 1) then return i, new:sub(i, i) end
+		return nil
+	end
+	local function onTextEdit()
+		local new, old = box.Text, lastText
+		if new == old then return end
+		lastText = new
+		if #new > 12000 or #old > 12000 then hideAC() return end
+		local i, c = diffInsert(old, new)
+		if i and box:IsFocused() then
+			if (c == "\t" or c == "\n") and ac.open and ac.text == old then
+				lastText = old
+				box.Text = old
+				acAccept(ac.sel)
+				return
+			end
+			if c == "\n" then
+				local lineStart = old:sub(1, i - 1):match(".*\n()") or 1
+				local line = old:sub(lineStart, i - 1)
+				local indent = line:match("^[\t ]*") or ""
+				local trimmed = (line:gsub("%s+$", ""))
+				local extra = ""
+				if trimmed:match("%f[%w_]then$") or trimmed:match("%f[%w_]do$") or trimmed:match("%f[%w_]else$")
+					or trimmed:match("%f[%w_]repeat$") or trimmed:match("{$") or trimmed:match("function%s*[%w_.:]*%s*%b()$") then
+					extra = "\t"
+				end
+				if indent ~= "" or extra ~= "" then
+					applyText(new:sub(1, i) .. indent .. extra .. new:sub(i + 1), i + 1 + #indent + #extra)
+					hideAC()
+					return
+				end
+			elseif CLOSERS[c] and new:sub(i + 1, i + 1) == c then
+				applyText(new:sub(1, i - 1) .. new:sub(i + 1), i + 1)
+				return
+			elseif PAIRS[c] then
+				local nextCh = new:sub(i + 1, i + 1)
+				local prevCh = i > 1 and new:sub(i - 1, i - 1) or ""
+				local okPair = (nextCh == "" or nextCh:match("[%s%)%]%}%.,;]") ~= nil)
+				if (c == '"' or c == "'") and prevCh:match("[%w_]") then okPair = false end
+				if okPair then
+					applyText(new:sub(1, i) .. PAIRS[c] .. new:sub(i + 1), i + 1)
+					return
+				end
+			end
+		end
+		task.defer(acRefresh)
+	end
+
+	local function getLineH()
+		local tb = box.TextBounds.Y
+		local _, total = box.Text:gsub("\n", "\n")
+		if box.Text ~= "" and tb > 0 then return tb / (total + 1) end
+		return TextService:GetTextSize("Ag", FSIZE, FONT, Vector2.new(1e5, 1e5)).Y
+	end
+	updateCurLine = function()
+		local cp = box.CursorPosition
+		local idx
+		if cp and cp >= 1 then
+			local _, nl = box.Text:sub(1, cp - 1):gsub("\n", "\n")
+			idx = nl
+			local lh = getLineH()
+			curLine.Position = UDim2.fromOffset(0, idx * lh)
+			curLine.Size = UDim2.fromOffset(canvasW, lh)
+			curLine.Visible = true
+		else
+			curLine.Visible = false
+		end
+		local newIdx = idx and (idx + 1) or 0
+		if newIdx ~= curIdx then
+			curIdx = newIdx
+			updateGutter()
+		end
+	end
+
+	bind(box:GetPropertyChangedSignal("Text"), onTextEdit)
+	bind(box:GetPropertyChangedSignal("CursorPosition"), function()
+		updateCurLine()
+		task.defer(acRefresh)
+	end)
+	bind(box.FocusLost, function()
+		task.delay(0.3, function()
+			if alive and not box:IsFocused() then hideAC() end
+		end)
+	end)
+	bind(UIS.InputBegan, function(input)
+		if not ac.open or not box:IsFocused() then return end
+		local kc = input.KeyCode
+		if kc == Enum.KeyCode.Down or kc == Enum.KeyCode.Up then
+			local n = #ac.items
+			ac.sel = (kc == Enum.KeyCode.Down) and (ac.sel % n + 1) or ((ac.sel - 2) % n + 1)
+			paintSel()
+			ac.navUntil = os.clock() + 0.15
+			local cur = ac.cursor
+			task.delay(0.03, function()
+				if box:IsFocused() then box.CursorPosition = cur end
+			end)
+		elseif kc == Enum.KeyCode.Escape then
+			hideAC()
+		end
+	end)
+
 
 	local reopenBtn = MiniBtn(codePanel, "panel-left", 16, { Size = UDim2.fromOffset(28, 28), AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -10, 0, 8), ZIndex = 6, Visible = not sideOpen })
 
@@ -2075,10 +2528,12 @@ safeBuild("Editor", function()
 		updateGutter()
 		updateHL()
 		relayout()
+		updateCurLine()
 	end
 	local function loadActive()
 		loading = true
 		box.Text = currentTab().code
+		lastText = box.Text
 		loading = false
 		updateAll()
 		scroller.CanvasPosition = Vector2.new(0, 0)
@@ -2199,19 +2654,22 @@ safeBuild("Editor", function()
 		for i, s2 in ipairs(SAVED) do
 			items[#items + 1] = { name = s2.name, code = s2.code, idx = i }
 		end
+		for _, f in ipairs(FILES) do
+			items[#items + 1] = { name = f.name, path = f.path, file = true }
+		end
 		for i, it in ipairs(items) do
 			local row = make("TextButton", {
 				Size = UDim2.new(1, 0, 0, 36), BackgroundColor3 = C.red, BackgroundTransparency = 1,
 				Text = "", AutoButtonColor = false, BorderSizePixel = 0, LayoutOrder = i,
 			}, savedBox)
 			round(row, 10)
-			local star = Icon(row, "star", 17, C.amber)
+			local star = Icon(row, it.file and "file-code" or "star", 17, it.file and C.blue or C.amber)
 			star.Position = UDim2.fromOffset(9, 9)
 			label({
 				Text = it.name, TextSize = 13, TextColor3 = C.text, TextTruncate = Enum.TextTruncate.AtEnd,
-				Position = UDim2.fromOffset(36, 0), Size = UDim2.new(1, it.builtin and -42 or -68, 1, 0),
+				Position = UDim2.fromOffset(36, 0), Size = UDim2.new(1, (it.builtin or it.file) and -42 or -68, 1, 0),
 			}, row)
-			if not it.builtin then
+			if not it.builtin and not it.file then
 				local del = MiniBtn(row, "trash", 13, { Size = UDim2.fromOffset(24, 24), AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -6, 0.5, 0) })
 				del.MouseButton1Click:Connect(function()
 					table.remove(SAVED, it.idx)
@@ -2221,9 +2679,59 @@ safeBuild("Editor", function()
 			end
 			row.MouseEnter:Connect(function() tween(row, 0.12, { BackgroundTransparency = 0.9 }) end)
 			row.MouseLeave:Connect(function() tween(row, 0.12, { BackgroundTransparency = 1 }) end)
-			row.MouseButton1Click:Connect(function() openScript(it.name, it.code) end)
+			row.MouseButton1Click:Connect(function()
+				local code = it.code
+				if it.path then
+					local okr, data = pcall(readfile, it.path)
+					if not okr or type(data) ~= "string" then
+						Notify({ Title = "Can't open file", Text = it.path, Type = "error", Duration = 4 })
+						return
+					end
+					code = data
+				end
+				openScript(it.name, code)
+			end)
 		end
 	end
+
+	-- watch the script folders: files saved or dropped in there appear in the list
+	local function scanFiles()
+		if not (listfiles and isfolder and readfile) then return end
+		local found, seen, sig = {}, {}, {}
+		for _, dir in ipairs(CONFIG.ScriptFolders or {}) do
+			local okd, isf = pcall(isfolder, dir)
+			if okd and isf then
+				local okl, list = pcall(listfiles, dir)
+				if okl and type(list) == "table" then
+					for _, path in ipairs(list) do
+						local lower = tostring(path):lower()
+						if (lower:match("%.lua$") or lower:match("%.luau$") or lower:match("%.txt$")) and not seen[path] then
+							seen[path] = true
+							local nm = tostring(path):match("([^/\\]+)$") or tostring(path)
+							nm = nm:gsub("%.%w+$", "")
+							found[#found + 1] = { name = nm, path = path }
+						end
+					end
+				end
+			end
+		end
+		table.sort(found, function(a, b) return a.name:lower() < b.name:lower() end)
+		for _, f in ipairs(found) do sig[#sig + 1] = f.path end
+		local key = table.concat(sig, "|")
+		if key ~= FILES.sig then
+			FILES.sig = key
+			for i = #FILES, 1, -1 do FILES[i] = nil end
+			for _, f in ipairs(found) do FILES[#FILES + 1] = f end
+			renderSaved()
+		end
+	end
+	for _, d in ipairs(CONFIG.ScriptFolders or {}) do ensureFolder(d) end
+	task.spawn(function()
+		while alive do
+			pcall(scanFiles)
+			task.wait(3)
+		end
+	end)
 
 	local function setSide(open, instant)
 		sideOpen = open
@@ -2252,13 +2760,7 @@ safeBuild("Editor", function()
 	end)
 	bind(renameBtn.MouseButton1Click, function() promptRename(nil) end)
 	bind(copyBtn.MouseButton1Click, function()
-		if trim(box.Text) == "" then
-			Notify({ Title = "Nothing to copy", Text = "The editor is empty.", Type = "warn", Duration = 2.5 })
-		elseif copyText(box.Text) then
-			Notify({ Title = "Copied", Text = "Script copied to clipboard.", Type = "success", Duration = 2.5 })
-		else
-			Notify({ Title = "Can't copy", Text = "Your executor has no clipboard function.", Type = "warn" })
-		end
+		doCopy(box.Text, currentTab().name, "Script")
 	end)
 
 	local running = false
@@ -2272,18 +2774,13 @@ safeBuild("Editor", function()
 		running = true
 		setIcon(runIc, "loader-circle")
 		spin(runIc)
-		local done, ok, err = false, false, nil
-		task.spawn(function()
-			ok, err = runCode(src)
-			done = true
-		end)
-		local t0 = os.clock()
-		while not done and os.clock() - t0 < 0.6 do task.wait() end
+		local okp, ok, err = pcall(runCode, src)
+		if not okp then ok, err = false, ok end
 		unspin(runIc)
 		setIcon(runIc, "play")
 		tintIcon(runIc, C.green)
 		running = false
-		if done and not ok then
+		if not ok then
 			warn("[Shadow] " .. tostring(err))
 			Notify({ Title = "Execution failed", Text = tostring(err):sub(1, 90), Type = "error", Duration = 6 })
 		else
@@ -2331,9 +2828,49 @@ safeBuild("ScriptBlox", function()
 	local thumbCache, thumbQueue, thumbWorker = {}, {}, false
 	local function absImg(u)
 		if type(u) ~= "string" or u == "" then return nil end
+		if u:sub(1, 2) == "//" then return "https:" .. u end
 		if u:sub(1, 4) == "http" then return u end
 		if u:sub(1, 1) ~= "/" then u = "/" .. u end
 		return "https://scriptblox.com" .. u
+	end
+	local function sniffExt(data)
+		if data:sub(1, 4) == "\137PNG" then return "png" end
+		if data:sub(1, 3) == "\255\216\255" then return "jpg" end
+		if data:sub(1, 4) == "RIFF" and data:sub(9, 12) == "WEBP" then return "webp" end
+		return nil
+	end
+	local function hashStr(str)
+		local h = 5381
+		for i = 1, #str do h = (h * 33 + string.byte(str, i)) % 4294967296 end
+		return string.format("%08x", h)
+	end
+	local function candidates(url)
+		local list = { url }
+		local a1 = url:gsub("/[Ww]ebp/", "/Png/")
+		if a1 ~= url then table.insert(list, 1, a1) end
+		local a2 = url:gsub("%.[Ww]ebp", ".png")
+		if a2 ~= url then list[#list + 1] = a2 end
+		return list
+	end
+	local function downloadAsset(url)
+		if thumbCache[url] then return thumbCache[url] end
+		if not gca or not canFile() then return nil end
+		for _, c in ipairs(candidates(url)) do
+			local data = httpGet(c)
+			if data then
+				local ext = sniffExt(data)
+				if ext == "png" or ext == "jpg" then
+					local fname = "thumb_" .. hashStr(c) .. "." .. ext
+					fileWrite(fname, data)
+					local ok, a = pcall(gca, FOLDER .. "/" .. fname)
+					if ok and a then
+						thumbCache[url] = a
+						return a
+					end
+				end
+			end
+		end
+		return nil
 	end
 	local function runThumbs()
 		if thumbWorker then return end
@@ -2342,23 +2879,8 @@ safeBuild("ScriptBlox", function()
 			while alive and #thumbQueue > 0 do
 				local job = table.remove(thumbQueue, 1)
 				if job.img.Parent then
-					local asset = thumbCache[job.url]
-					if not asset then
-						local ext = job.url:match("%.(%a+)[%?#]?[^/]*$")
-						ext = ext and ext:lower()
-						if ext == "png" or ext == "jpg" or ext == "jpeg" then
-							local data = httpGet(job.url)
-							if data then
-								local fname = "thumb_" .. job.url:gsub("[^%w]", ""):sub(-40) .. "." .. ext
-								fileWrite(fname, data)
-								local ok, a = pcall(gca, FOLDER .. "/" .. fname)
-								if ok and a then
-									asset = a
-									thumbCache[job.url] = a
-								end
-							end
-						end
-					end
+					local asset = job.url and downloadAsset(job.url) or nil
+					asset = asset or job.fallback
 					if asset and job.img.Parent then
 						job.img.Image = asset
 						tween(job.img, 0.3, { ImageTransparency = 0 })
@@ -2369,14 +2891,21 @@ safeBuild("ScriptBlox", function()
 			thumbWorker = false
 		end)
 	end
-	local function queueThumb(img, url)
-		if not gca or not canFile() or not url then return end
-		thumbQueue[#thumbQueue + 1] = { img = img, url = url }
+	local function queueThumb(img, url, fallback)
+		if not url and not fallback then return end
+		thumbQueue[#thumbQueue + 1] = { img = img, url = url, fallback = fallback }
 		runThumbs()
 	end
 	local function thumbUrl(s2)
 		local g = type(s2.game) == "table" and s2.game or nil
 		return absImg(s2.image) or (g and absImg(g.imageUrl)) or nil
+	end
+	-- Roblox's own game icon, used when the image can't be downloaded
+	local function thumbFallback(s2)
+		local g = type(s2.game) == "table" and s2.game or nil
+		local id = g and tonumber(g.gameId)
+		if id then return "rbxthumb://type=GameIcon&id=" .. id .. "&w=256&h=256" end
+		return nil
 	end
 	local function hashHue(str)
 		local h = 0
@@ -2395,20 +2924,14 @@ safeBuild("ScriptBlox", function()
 
 	local function runScript(s2, onStart, onEnd)
 		if onStart then onStart() end
-		local done, ok, err = false, false, nil
-		task.spawn(function()
+		local okp, ok, err = pcall(function()
 			local src = (type(s2.script) == "string" and #s2.script > 0) and s2.script or nil
 			if not src and s2.slug then src = httpGet(SB_RAW .. s2.slug) end
-			if not src then
-				ok, err = false, "Could not fetch this script"
-			else
-				ok, err = runCode(src)
-			end
-			done = true
+			if not src then return false, "Could not fetch this script" end
+			return runCode(src)
 		end)
-		local t0 = os.clock()
-		while not done and os.clock() - t0 < 0.8 do task.wait() end
-		local failed = done and not ok
+		if not okp then ok, err = false, ok end
+		local failed = not ok
 		if failed then
 			warn("[Shadow] " .. tostring(err))
 			Notify({ Title = "Execution failed", Text = tostring(err):sub(1, 90), Type = "error", Duration = 6 })
@@ -2420,11 +2943,7 @@ safeBuild("ScriptBlox", function()
 	local function copyLoadstring(s2)
 		local text
 		if s2.slug then text = 'loadstring(game:HttpGet("' .. SB_RAW .. s2.slug .. '"))()' else text = type(s2.script) == "string" and s2.script or nil end
-		if text and copyText(text) then
-			Notify({ Title = "Copied", Text = "Loadstring copied to clipboard", Type = "success", Duration = 2.5 })
-		else
-			Notify({ Title = "Can't copy", Text = "Your executor has no clipboard function", Type = "warn" })
-		end
+		doCopy(text, s2.title or "scriptblox", "Loadstring")
 	end
 
 	local home = make("ScrollingFrame", {
@@ -2509,7 +3028,7 @@ safeBuild("ScriptBlox", function()
 		dInit.Text = initials(gname)
 		dThumb.Image = ""
 		dThumb.ImageTransparency = 1
-		queueThumb(dThumb, thumbUrl(s2))
+		queueThumb(dThumb, thumbUrl(s2), thumbFallback(s2))
 		dTitle.Text = title
 		local parts = { esc(gname) }
 		if s2.verified then parts[#parts + 1] = '<font color="rgb(90,210,125)">Verified</font>' end
@@ -2553,7 +3072,7 @@ safeBuild("ScriptBlox", function()
 		label({ Text = initials(gname), Font = Enum.Font.GothamBlack, TextSize = 26, TextColor3 = C.white, TextTransparency = 0.35, TextXAlignment = Enum.TextXAlignment.Center, Size = UDim2.fromScale(1, 1) }, cover)
 		local thumb = make("ImageLabel", { Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, ScaleType = Enum.ScaleType.Crop, ImageTransparency = 1, BorderSizePixel = 0 }, cover)
 		round(thumb, 12)
-		queueThumb(thumb, thumbUrl(s2))
+		queueThumb(thumb, thumbUrl(s2), thumbFallback(s2))
 
 		local ring = frame({ Size = UDim2.new(1, 0, 0, coverH), BackgroundTransparency = 1, ZIndex = 2 }, card)
 		round(ring, 12)
@@ -2917,10 +3436,8 @@ safeBuild("Console", function()
 	bind(copyBtn.MouseButton1Click, function()
 		if #texts == 0 then
 			Notify({ Title = "Console is empty", Text = "Nothing to copy.", Type = "warn", Duration = 2.5 })
-		elseif copyText(table.concat(texts, "\n")) then
-			Notify({ Title = "Copied", Text = "Console output copied to clipboard.", Type = "success", Duration = 2.5 })
 		else
-			Notify({ Title = "Can't copy", Text = "Your executor has no clipboard function.", Type = "warn" })
+			doCopy(table.concat(texts, "\n"), "console", "Console output")
 		end
 	end)
 end)
@@ -3484,6 +4001,33 @@ local function unlockHub()
 	if STATE.dismissKey then STATE.dismissKey() end
 	if STATE.reveal then STATE.reveal() end
 	showPage("Home")
+	task.spawn(function()
+		local last
+		while alive do
+			task.wait(5)
+			local e = STATE.keyExpiry
+			if e then
+				local rem = e - os.time()
+				if rem <= 0 then
+					Notify({ Title = "Key expired", Text = "Your key has run out. Get a new one to keep using Shadow.", Type = "error", Icon = "lock", Duration = 6, Force = true })
+					task.wait(4)
+					if alive then cleanup() end
+					return
+				end
+				if last then
+					for _, th in ipairs({ 86400, 3600, 300 }) do
+						if last > th and rem <= th then
+							local txt = th == 86400 and "less than a day" or th == 3600 and "less than an hour" or "less than 5 minutes"
+							Notify({ Title = "Key expiring soon", Text = "Your key has " .. txt .. " left.", Type = "warn", Icon = "clock", Duration = 6, Force = true })
+						end
+					end
+				end
+				last = rem
+			else
+				last = nil
+			end
+		end
+	end)
 	if unread then
 		task.delay(0.9, function()
 			Notify({ Title = "What's new in v" .. VERSION, Text = "Open the Updates tab to see what changed.", Type = "info", Icon = "sparkles", Duration = 5 })
@@ -3688,9 +4232,28 @@ if KEYCFG.Enabled then
 		end
 
 		bind(keyBox:GetPropertyChangedSignal("Text"), function()
+			local up = keyBox.Text:upper()
+			if up ~= keyBox.Text then
+				keyBox.Text = up
+				return
+			end
 			if busy or locked then return end
-			tween(irs, 0.15, { Color = C.stroke, Transparency = 0.3 })
-			setStatus("", C.sub)
+			local kind, kexp = signedKeyState(keyBox.Text)
+			if kind == "valid" then
+				tween(irs, 0.15, { Color = C.green, Transparency = 0.2 })
+				if kexp then
+					local d = math.floor((kexp - os.time()) / 86400)
+					setStatus("Valid timed key  |  " .. (d <= 0 and "expires today" or ("expires in " .. d .. " day" .. (d == 1 and "" or "s"))), C.green)
+				else
+					setStatus("Valid lifetime key", C.green)
+				end
+			elseif kind == "expired" then
+				tween(irs, 0.15, { Color = C.amber, Transparency = 0.2 })
+				setStatus("This key has expired", C.amber)
+			else
+				tween(irs, 0.15, { Color = C.stroke, Transparency = 0.3 })
+				setStatus("", C.sub)
+			end
 		end)
 		do
 			local untilT = tonumber(fileRead("lock.txt") or "")

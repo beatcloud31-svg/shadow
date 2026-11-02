@@ -4,18 +4,18 @@ local CONFIG = {
 	Credits   = "X4V",
 	Discord   = "https://discord.gg/EXrwmjYcU",
 
-	-- Shown on the Home page. Edit names/roles here.
+	
 	Developers = {
 		{ name = "X4V",      role = "UI Designer | Founder", avatar = "https://cdn.discordapp.com/avatars/1149740153850581054/21ea19ca39c74ff76502e2c3169985dd.png?size=128" },
 	},
 
-	-- Quick access scripts on the Home page: { name, desc, icon, url }
+	l
 	QuickScripts = {
 		{ name = "Infinite Yield", desc = "Admin commands", icon = "terminal", url = "https://raw.githubusercontent.com/EdgeIY/infiniteyield/master/source", fallbacks = { "https://cdn.jsdelivr.net/gh/EdgeIY/infiniteyield@master/source" } },
 	},
 	ToggleKey = Enum.KeyCode.RightShift,
 	ScriptsFolder = "workspace/scripts",
-	-- Folders that are created and watched: any .lua/.luau/.txt dropped in here shows up under "Saved scripts"
+	
 	ScriptFolders = { "workspace/scripts", "scripts", "workspace" },  -- where "copy" saves a script file if the clipboard is unavailable
 	NotifyPosition = "TopRight",
 

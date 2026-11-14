@@ -24,13 +24,11 @@ local CONFIG = {
 		GetKeyLink  = "https://direct-link.net/10467882/1BXMAi69pzfM",
 
 		RemoteUrl   = "",
-		Keys        = {},  -- plain keys (optional): "KEY | YYYY-MM-DD". Empty = only bot-generated keys work.
-		-- keys from /shadowgenkey (SF-... lifetime, ST-... timed). Must match
-		-- shadow_secret in the bot's config.json, or generated keys won't work.
+		Keys        = {},  
 		Secret      = "shadow-5353v4e7tbdjo01rcy0725s9xj",
-		DefaultDays = 30,    -- keys with no date expire this many days after first use (0 = never)
+		DefaultDays = 30,  
 		Remember    = true,
-		OfflineHours = 48,   -- how long the last downloaded key list stays usable if the server is down
+		OfflineHours = 48,   
 		MaxAttempts = 5,
 		LockSeconds = 30,
 	},
